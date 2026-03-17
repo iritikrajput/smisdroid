@@ -1,3 +1,4 @@
+import 'dart:ui' show Color;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/utils/logger.dart';
@@ -146,9 +147,4 @@ class NotificationService {
   static Future<void> cancel(int id) async {
     await _notifications.cancel(id);
   }
-}
-
-class Color {
-  final int value;
-  const Color(this.value);
 }

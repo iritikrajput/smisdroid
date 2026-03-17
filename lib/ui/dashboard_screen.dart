@@ -5,7 +5,6 @@ import '../core/constants/app_strings.dart';
 import '../core/utils/extensions.dart';
 import '../services/database_service.dart';
 import '../services/sms_listener.dart';
-import '../models/sms_analysis_result.dart';
 import 'alert_screen.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/risk_badge.dart';

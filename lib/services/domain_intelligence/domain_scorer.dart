@@ -211,12 +211,12 @@ class ScoringIndicator {
     required this.severity,
   });
 
-  Color get severityColor {
+  int get severityColorHex {
     switch (severity) {
-      case Severity.critical: return const Color(0xFFFF3B30);
-      case Severity.high:     return const Color(0xFFFF6B35);
-      case Severity.medium:   return const Color(0xFFFF9500);
-      case Severity.low:      return const Color(0xFF34C759);
+      case Severity.critical: return 0xFFFF3B30;
+      case Severity.high:     return 0xFFFF6B35;
+      case Severity.medium:   return 0xFFFF9500;
+      case Severity.low:      return 0xFF34C759;
     }
   }
 }

@@ -9,7 +9,7 @@ class UrlResolver {
   // ── 1. Extract raw URLs from message text ──────────────────────
   static List<String> extractUrls(String message) {
     final regex = RegExp(
-      r'(https?://[^\s"\'<>]+|www\.[a-zA-Z0-9\-]+\.[a-z]{2,}[^\s"\'<>]*)',
+      r'(https?://[^\s"<>]+|www\.[a-zA-Z0-9\-]+\.[a-z]{2,}[^\s"<>]*)',
       caseSensitive: false,
     );
     return regex
@@ -92,7 +92,7 @@ class UrlResolver {
       }
       return '.${parts.last}';
     }
-    return '.${domain}';
+    return '.$domain';
   }
 }
 
