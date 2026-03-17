@@ -1,4 +1,4 @@
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite/sqflite.dart' show Database, Sqflite, openDatabase, getDatabasesPath, ConflictAlgorithm;
 import 'package:path/path.dart';
 import '../models/sms_analysis_result.dart';
 
@@ -99,5 +99,91 @@ class DatabaseService {
       'suspicious': suspicious,
       'safe': total - fraud - suspicious,
     };
+  }
+
+  // Trusted Senders
+  static Future<bool> isTrustedSender(String sender) async {
+    final db = await database;
+    final result = await db.query(
+      'trusted_senders',
+      where: 'sender = ?',
+      whereArgs: [sender],
+    );
+    return result.isNotEmpty;
+  }
+
+  static Future<void> addTrustedSender(String sender) async {
+    final db = await database;
+    await db.insert(
+      'trusted_senders',
+      {
+        'sender': sender,
+        'added_at': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  static Future<void> removeTrustedSender(String sender) async {
+    final db = await database;
+    await db.delete(
+      'trusted_senders',
+      where: 'sender = ?',
+      whereArgs: [sender],
+    );
+  }
+
+  static Future<List<String>> getTrustedSenders() async {
+    final db = await database;
+    final result = await db.query('trusted_senders');
+    return result.map((r) => r['sender'] as String).toList();
+  }
+
+  // Domain Cache
+  static Future<Map<String, dynamic>?> getCachedDomain(String domain) async {
+    final db = await database;
+    final result = await db.query(
+      'domain_cache',
+      where: 'domain = ?',
+      whereArgs: [domain],
+    );
+    if (result.isEmpty) return null;
+
+    // Check if cache is still valid (24 hours)
+    final cachedAt = DateTime.parse(result.first['cached_at'] as String);
+    if (DateTime.now().difference(cachedAt).inHours > 24) {
+      await db.delete('domain_cache', where: 'domain = ?', whereArgs: [domain]);
+      return null;
+    }
+
+    return result.first;
+  }
+
+  static Future<void> cacheDomain({
+    required String domain,
+    required bool isPhishing,
+    required int score,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'domain_cache',
+      {
+        'domain': domain,
+        'is_phishing': isPhishing ? 1 : 0,
+        'score': score,
+        'cached_at': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  static Future<void> clearCache() async {
+    final db = await database;
+    await db.delete('domain_cache');
+  }
+
+  static Future<void> clearHistory() async {
+    final db = await database;
+    await db.delete('fraud_logs');
   }
 }

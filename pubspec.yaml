@@ -30,3 +30,6 @@ flutter:
     - assets/models/fraud_model.tflite
     - assets/data/keywords.json
     - assets/data/tld_list.json
+    - assets/nlp/model_weights.json
+    - assets/nlp/nlp_config.json
+    - assets/nlp/vocabulary.json
