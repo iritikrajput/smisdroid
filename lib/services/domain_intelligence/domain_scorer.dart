@@ -17,6 +17,27 @@ class DomainScorer {
     'mahadiscom', 'bescom', 'torrent', 'cesc',
   ];
 
+  /// Legitimate domains for typosquatting comparison
+  static const List<String> _legitimateDomains = [
+    'sbi.co.in', 'onlinesbi.sbi', 'hdfcbank.com', 'icicibank.com',
+    'axisbank.com', 'kotak.com', 'yesbank.in', 'bankofbaroda.in',
+    'pnbindia.in', 'adanielectricity.com', 'tatpower.com',
+    'bescom.co.in', 'mahadiscom.in', 'airtel.in', 'jio.com',
+    'paytm.com', 'phonepe.com', 'googlepay.com', 'amazonpay.in',
+    'irctc.co.in', 'incometax.gov.in', 'epfindia.gov.in',
+  ];
+
+  /// Homograph character map: confusable Unicode → Latin equivalent
+  static const Map<int, String> _homoglyphs = {
+    // Cyrillic
+    0x0430: 'a', 0x0435: 'e', 0x043E: 'o', 0x0440: 'p',
+    0x0441: 'c', 0x0443: 'y', 0x0445: 'x', 0x0456: 'i',
+    0x0455: 's', 0x0458: 'j', 0x04BB: 'h', 0x0432: 'b',
+    // Greek
+    0x03BF: 'o', 0x03BD: 'v', 0x03C4: 't', 0x03B1: 'a',
+    0x03B5: 'e', 0x03BA: 'k', 0x03B9: 'i',
+  };
+
   static DomainScore calculate({
     required RedirectChainResult redirect,
     required DnsAnalysisResult dns,
@@ -97,7 +118,26 @@ class DomainScorer {
       }
     }
 
-    // ── 6. Hyphen count (typosquatting) ────────────────────────
+    // ── 6. Homograph / Punycode detection ─────────────────────
+    final homographResult = _detectHomographs(domain);
+    if (homographResult > 0) {
+      score += homographResult;
+      indicators.add(ScoringIndicator(
+        category: 'Homograph',
+        description: 'Suspicious Unicode characters or Punycode detected in domain',
+        points: homographResult,
+        severity: Severity.critical,
+      ));
+    }
+
+    // ── 7. Typosquatting (Levenshtein distance) ──────────────
+    final typoResult = _detectTyposquatting(domain);
+    if (typoResult != null) {
+      score += typoResult.points;
+      indicators.add(typoResult);
+    }
+
+    // ── 7b. Hyphen count (additional typosquatting signal) ───
     final hyphens = domainName.split('-').length - 1;
     if (hyphens >= 2) {
       final pts = (hyphens * 7).clamp(0, 20);
@@ -177,6 +217,82 @@ class DomainScorer {
       createdDate: whois.createdDate,
       nameservers: dns.nameservers,
     );
+  }
+
+  /// Detect homograph attacks (mixed scripts, punycode, confusable chars)
+  static int _detectHomographs(String domain) {
+    int points = 0;
+
+    // Check for Punycode (xn--)
+    if (domain.contains('xn--')) {
+      points += 20;
+    }
+
+    // Check for homoglyph characters
+    bool hasHomoglyph = false;
+    bool hasLatin = false;
+    for (final rune in domain.runes) {
+      if (_homoglyphs.containsKey(rune)) {
+        hasHomoglyph = true;
+      }
+      if ((rune >= 0x0041 && rune <= 0x005A) || (rune >= 0x0061 && rune <= 0x007A)) {
+        hasLatin = true;
+      }
+    }
+
+    // Mixed scripts (Latin + confusable Unicode)
+    if (hasHomoglyph && hasLatin) {
+      points += 25;
+    } else if (hasHomoglyph) {
+      points += 15;
+    }
+
+    return points;
+  }
+
+  /// Detect typosquatting via Levenshtein distance against legitimate domains
+  static ScoringIndicator? _detectTyposquatting(String domain) {
+    for (final legit in _legitimateDomains) {
+      final distance = _levenshteinDistance(domain, legit);
+      final maxLen = domain.length > legit.length ? domain.length : legit.length;
+      if (maxLen == 0) continue;
+      final similarity = 1.0 - (distance / maxLen);
+
+      if (similarity > 0.75 && domain != legit) {
+        return ScoringIndicator(
+          category: 'Typosquatting',
+          description: 'Similar to legitimate "$legit" (${(similarity * 100).toStringAsFixed(0)}% match)',
+          points: 30,
+          severity: Severity.critical,
+        );
+      }
+    }
+    return null;
+  }
+
+  /// Levenshtein edit distance between two strings
+  static int _levenshteinDistance(String s1, String s2) {
+    if (s1.isEmpty) return s2.length;
+    if (s2.isEmpty) return s1.length;
+
+    List<int> prev = List.generate(s2.length + 1, (i) => i);
+    List<int> curr = List.filled(s2.length + 1, 0);
+
+    for (int i = 1; i <= s1.length; i++) {
+      curr[0] = i;
+      for (int j = 1; j <= s2.length; j++) {
+        final cost = s1[i - 1] == s2[j - 1] ? 0 : 1;
+        curr[j] = [
+          prev[j] + 1,
+          curr[j - 1] + 1,
+          prev[j - 1] + cost,
+        ].reduce((a, b) => a < b ? a : b);
+      }
+      final temp = prev;
+      prev = curr;
+      curr = temp;
+    }
+    return prev[s2.length];
   }
 
   static double _shannonEntropy(String text) {

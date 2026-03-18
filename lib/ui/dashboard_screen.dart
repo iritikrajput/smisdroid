@@ -6,6 +6,8 @@ import '../core/utils/extensions.dart';
 import '../services/database_service.dart';
 import '../services/sms_listener.dart';
 import 'alert_screen.dart';
+import 'history_screen.dart';
+import 'settings_screen.dart';
 import 'widgets/stat_card.dart';
 import 'widgets/risk_badge.dart';
 
@@ -62,6 +64,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadData,
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
           ),
         ],
       ),
@@ -267,7 +278,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (_recentLogs.isNotEmpty)
               TextButton(
                 onPressed: () {
-                  // Navigate to full history
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => const HistoryScreen()),
+                  );
                 },
                 child: const Text(AppStrings.viewAll),
               ),

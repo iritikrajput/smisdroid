@@ -8,8 +8,9 @@ class RiskThresholds {
 
   // Component Weight Distribution (must sum to 1.0)
   static const double nlpWeight = 0.40;
-  static const double domainWeight = 0.35;
-  static const double ruleWeight = 0.25;
+  static const double domainWeight = 0.30;
+  static const double ruleWeight = 0.20;
+  static const double structuralWeight = 0.10;
 
   // Domain Score Thresholds (0 - 100)
   static const int domainSafeMax = 25;

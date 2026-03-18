@@ -49,4 +49,32 @@ class MessagePreprocessor {
       'uppercase_ratio': text.split('').where((c) => c == c.toUpperCase() && c != c.toLowerCase()).length / text.length,
     };
   }
+
+  /// Calculate structural features score (0.0 - 1.0)
+  static double calculateStructuralScore(String text, List<String> urls) {
+    double score = 0.0;
+
+    // Has URL
+    if (urls.isNotEmpty) score += 0.3;
+
+    // High uppercase ratio (>30%)
+    final letters = text.split('').where((c) => c != c.toUpperCase() || c != c.toLowerCase());
+    if (letters.isNotEmpty) {
+      final upper = text.split('').where((c) => c == c.toUpperCase() && c != c.toLowerCase()).length;
+      if (upper / text.length > 0.3) score += 0.2;
+    }
+
+    // Contains currency symbols
+    if (RegExp(r'(₹|Rs\.?|INR|rupee)', caseSensitive: false).hasMatch(text)) {
+      score += 0.15;
+    }
+
+    // Short message with URL (likely phishing)
+    if (urls.isNotEmpty && text.length < 100) score += 0.2;
+
+    // Multiple exclamation marks
+    if (RegExp(r'!{2,}').hasMatch(text)) score += 0.15;
+
+    return score.clamp(0.0, 1.0);
+  }
 }

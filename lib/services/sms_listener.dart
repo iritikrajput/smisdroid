@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:telephony/telephony.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/utils/logger.dart';
+import '../core/constants/app_strings.dart';
 import '../models/sms_analysis_result.dart';
 import 'risk_engine.dart';
+import 'notification_service.dart';
 
 typedef SmsCallback = void Function(SmsAnalysisResult result);
 
@@ -158,6 +160,15 @@ Future<void> _backgroundMessageHandler(SmsMessage message) async {
     AppLogger.warning(
       'Background SMS flagged as ${result.riskLevel}',
       tag: 'SMS',
+    );
+
+    await NotificationService.initialize();
+    NotificationService.showFraudAlert(
+      title: result.riskLevel == 'FRAUD'
+          ? AppStrings.fraudAlertTitle
+          : AppStrings.suspiciousAlertTitle,
+      body: 'From: ${result.sender}',
+      payload: result.originalMessage,
     );
   }
 }

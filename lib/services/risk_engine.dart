@@ -9,6 +9,14 @@ import 'database_service.dart';
 
 class RiskEngine {
   final NlpClassifier _nlpClassifier = NlpClassifier();
+  bool _initialized = false;
+
+  Future<void> _ensureInitialized() async {
+    if (!_initialized) {
+      await _nlpClassifier.initialize();
+      _initialized = true;
+    }
+  }
 
   Future<SmsAnalysisResult> analyzeMessage({
     required String message,
@@ -16,6 +24,8 @@ class RiskEngine {
   }) async {
     AppLogger.risk('Starting analysis for message from: $sender');
     final startTime = DateTime.now();
+
+    await _ensureInitialized();
 
     // Check if sender is trusted
     final isTrusted = await DatabaseService.isTrustedSender(sender);
@@ -56,13 +66,17 @@ class RiskEngine {
     final domainScore = domainResult['score'] as int;
     final domainIndicators = domainResult['indicators'] as List<String>;
 
+    // Calculate structural features score
+    final structuralScore = MessagePreprocessor.calculateStructuralScore(message, urls);
+
     // Calculate final risk score using weighted formula
     final normalizedDomain = RiskThresholds.normalizeDomainScore(domainScore);
     final normalizedRule = RiskThresholds.normalizeRuleScore(ruleScore);
 
     final finalScore = (RiskThresholds.nlpWeight * nlpScore) +
         (RiskThresholds.domainWeight * normalizedDomain) +
-        (RiskThresholds.ruleWeight * normalizedRule);
+        (RiskThresholds.ruleWeight * normalizedRule) +
+        (RiskThresholds.structuralWeight * structuralScore);
 
     final riskLevel = RiskThresholds.getRiskLevel(finalScore);
 
@@ -88,6 +102,8 @@ class RiskEngine {
         'domain_contribution': normalizedDomain * RiskThresholds.domainWeight,
         'rule_score': ruleScore,
         'rule_contribution': normalizedRule * RiskThresholds.ruleWeight,
+        'structural_score': structuralScore,
+        'structural_contribution': structuralScore * RiskThresholds.structuralWeight,
         'final_score': finalScore,
         'analysis_time_ms': analysisTime,
       },

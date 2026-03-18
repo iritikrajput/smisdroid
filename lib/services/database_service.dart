@@ -72,6 +72,19 @@ class DatabaseService {
     return db.query('fraud_logs', orderBy: 'id DESC', limit: limit);
   }
 
+  static Future<List<Map<String, dynamic>>> getLogsByRiskLevel(String? riskLevel) async {
+    final db = await database;
+    if (riskLevel == null) {
+      return db.query('fraud_logs', orderBy: 'id DESC');
+    }
+    return db.query('fraud_logs', where: 'risk_level = ?', whereArgs: [riskLevel], orderBy: 'id DESC');
+  }
+
+  static Future<void> deleteLog(int id) async {
+    final db = await database;
+    await db.delete('fraud_logs', where: 'id = ?', whereArgs: [id]);
+  }
+
   static Future<Map<String, int>> getStats() async {
     final db = await database;
     final total =
