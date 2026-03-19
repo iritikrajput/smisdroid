@@ -15,12 +15,13 @@ A privacy-preserving Android application that detects SMS-based financial fraud 
 5. [Tier 2: Domain Intelligence Module](#5-tier-2-domain-intelligence-module)
 6. [Tier 3: Heuristic Rule Engine](#6-tier-3-heuristic-rule-engine)
 7. [Risk Scoring Formula](#7-risk-scoring-formula)
-8. [Data Models](#8-data-models)
-9. [Project Structure](#9-project-structure)
-10. [Tech Stack](#10-tech-stack)
-11. [Getting Started](#11-getting-started)
-12. [Testing](#12-testing)
-13. [References](#13-references)
+8. [Auto-Block & Background Protection](#8-auto-block--background-protection)
+9. [Data Models](#9-data-models)
+10. [Project Structure](#10-project-structure)
+11. [Tech Stack](#11-tech-stack)
+12. [Getting Started](#12-getting-started)
+13. [Testing](#13-testing)
+14. [References](#14-references)
 
 ---
 
@@ -76,19 +77,27 @@ Incoming SMS (BroadcastReceiver / Telephony Plugin)
 │   (Classification + Action)     │    / FRAUD (>0.6)
 └─────────────┬───────────────────┘
               │
-    ┌─────────┼─────────┐
-    ▼         ▼         ▼
- Notification  SQLite   UI Update
-   Alert       Log      (Stream)
+    ┌─────────┼─────────┬──────────────┐
+    ▼         ▼         ▼              ▼
+ Notification  SQLite   UI Update   Auto-Block
+   Alert       Log      (Stream)    (if FRAUD)
+                                       │
+                                       ▼
+                                 blocked_messages
+                                    (SQLite)
 ```
 
 ### 2.2 Component Interaction
 
-1. **SMS Reception** — `SmsListener` intercepts via the `telephony` plugin. Both foreground and background handlers are registered. Background handler includes notification dispatch.
+1. **SMS Reception** — `SmsListener` intercepts via the `telephony` plugin. Both foreground and background handlers are registered with `listenInBackground: true`. Background handler runs even when the app is closed or killed.
 2. **Preprocessing** (<5ms) — `MessagePreprocessor` normalizes text, extracts URLs via regex, tokenizes, and computes structural features (uppercase ratio, currency symbols, URL presence).
 3. **Parallel Analysis** (30-50ms each) — Three tiers plus structural scoring run concurrently via `Future.wait()`.
 4. **Risk Scoring** (<5ms) — `RiskEngine` combines all four signals using the weighted formula.
-5. **Decision + Action** (<5ms) — Classifies risk level, dispatches notification if suspicious/fraud, logs to SQLite, and pushes result to the dashboard stream.
+5. **Decision + Action** (<5ms) — Classifies risk level, then:
+   - **FRAUD** → Auto-blocks message (saves to `blocked_messages` table), shows red high-priority notification
+   - **SUSPICIOUS** → Shows orange warning notification
+   - **SAFE** → No action
+   - All results are logged to `fraud_logs` and pushed to the dashboard stream.
 
 ### 2.3 Offline vs Online Behavior
 
@@ -121,7 +130,11 @@ SMS Received
     → RiskThresholds.getRiskLevel(finalScore)
     → DatabaseService.logResult()
     → StreamController.add(result)           // Push to UI
-    → NotificationService.showFraudAlert()   // If not SAFE
+    → if FRAUD:
+        DatabaseService.blockMessage(result) // Auto-block
+        NotificationService.showFraudAlert() // Red notification
+    → if SUSPICIOUS:
+        NotificationService.showSuspiciousAlert() // Orange notification
 ```
 
 ### 3.2 Processing Time Budget
@@ -323,11 +336,11 @@ Output clamped to 0.0–1.0.
 
 ### 7.4 Classification Thresholds
 
-| Risk Score | Classification | User Action | Notification |
-|------------|---------------|-------------|--------------|
-| 0.00 – 0.30 | **SAFE** | None | None |
-| 0.31 – 0.60 | **SUSPICIOUS** | Warning banner | Orange alert |
-| 0.61 – 1.00 | **FRAUD** | High alert with risk breakdown | Red alert (high priority) |
+| Risk Score | Classification | User Action | Notification | Auto-Block |
+|------------|---------------|-------------|--------------|------------|
+| 0.00 – 0.30 | **SAFE** | None | None | No |
+| 0.31 – 0.60 | **SUSPICIOUS** | Warning banner | Orange alert | No |
+| 0.61 – 1.00 | **FRAUD** | High alert + blocked | Red alert (high priority) | **Yes** |
 
 ### 7.5 Example Calculation
 
@@ -348,9 +361,82 @@ Classification: FRAUD (>0.60)
 
 ---
 
-## 8. Data Models
+## 8. Auto-Block & Background Protection
 
-### 8.1 SmsAnalysisResult
+### 8.1 Background SMS Processing
+
+The app uses the `telephony` plugin's `listenInBackground: true` mode combined with a `@pragma('vm:entry-point')` background handler. This ensures SMS analysis runs even when:
+
+- The app is minimized / in the background
+- The app has been swiped away from recents
+- The device screen is off
+
+```
+Background SMS Received
+  → _backgroundMessageHandler()           // @pragma('vm:entry-point')
+    → NotificationService.initialize()     // Re-init (new isolate)
+    → RiskEngine().analyzeMessage()        // Full 3-tier pipeline
+    → if FRAUD:
+        DatabaseService.blockMessage()     // Save to blocked_messages table
+        NotificationService.showFraudAlert("Blocked message from: ...")
+    → if SUSPICIOUS:
+        NotificationService.showSuspiciousAlert()
+```
+
+### 8.2 Auto-Block Flow
+
+When any message scores **>0.60** (FRAUD classification), the system automatically:
+
+1. **Blocks the message** — saves complete message data (sender, text, scores, URLs, rules) to the `blocked_messages` SQLite table
+2. **Sends a notification** — high-priority red notification: "Blocked message from: [sender]"
+3. **Logs the analysis** — full detection result saved to `fraud_logs` for history
+
+This happens identically in both foreground (via `onSmsAnalyzed` callback) and background (via `_backgroundMessageHandler`).
+
+### 8.3 Blocked Messages UI
+
+The app provides a dedicated **Blocked Messages** screen accessible from the dashboard:
+
+- **Dashboard banner** — red gradient card showing blocked count, taps through to blocked list
+- **Blocked list** — each blocked message shows:
+  - Sender + timestamp + risk score badge
+  - Full message text with URLs displayed struck-through (disabled links)
+  - **Details** button — bottom sheet with full score breakdown (NLP, Domain, Rules)
+  - **Unblock** button — removes message from blocked list
+- **Clear All** — bulk delete all blocked messages
+
+### 8.4 Blocked Messages Database Schema
+
+```sql
+CREATE TABLE blocked_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender TEXT,
+  message TEXT,              -- Full original message text
+  risk_score REAL,           -- 0.0 – 1.0
+  urls TEXT,                 -- Comma-separated detected URLs
+  rules TEXT,                -- Pipe-separated triggered rules
+  domain_score INTEGER,      -- 0 – 100
+  nlp_score REAL,            -- 0.0 – 1.0
+  blocked_at TEXT            -- ISO 8601 timestamp
+);
+```
+
+### 8.5 Required Android Permissions for Background
+
+| Permission | Purpose |
+|------------|---------|
+| `RECEIVE_SMS` | Intercept SMS in real time (foreground + background) |
+| `READ_SMS` | Read message content for analysis |
+| `POST_NOTIFICATIONS` | Display fraud/suspicious alerts when app is backgrounded |
+| `READ_PHONE_STATE` | Identify sender in background processing |
+
+The `telephony` plugin automatically registers its own `BroadcastReceiver` for `SMS_RECEIVED` intents, so no custom receiver is needed in `AndroidManifest.xml`.
+
+---
+
+## 9. Data Models
+
+### 9.1 SmsAnalysisResult
 
 ```dart
 class SmsAnalysisResult {
@@ -367,7 +453,7 @@ class SmsAnalysisResult {
 }
 ```
 
-### 8.2 DomainScore
+### 9.2 DomainScore
 
 ```dart
 class DomainScore {
@@ -384,7 +470,7 @@ class DomainScore {
 }
 ```
 
-### 8.3 Database Schema (SQLite)
+### 9.3 Database Schema (SQLite)
 
 ```sql
 -- Detection logs
@@ -415,11 +501,24 @@ CREATE TABLE domain_cache (
   score INTEGER,
   cached_at TEXT
 );
+
+-- Auto-blocked fraud messages
+CREATE TABLE blocked_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sender TEXT,
+  message TEXT,
+  risk_score REAL,
+  urls TEXT,
+  rules TEXT,
+  domain_score INTEGER,
+  nlp_score REAL,
+  blocked_at TEXT
+);
 ```
 
 ---
 
-## 9. Project Structure
+## 10. Project Structure
 
 ```
 lib/
@@ -443,7 +542,7 @@ lib/
 │   ├── risk_engine.dart               # Orchestrator: parallel analysis + scoring
 │   ├── rule_engine.dart               # Keyword categories + combo bonuses
 │   ├── preprocessor.dart              # Text cleaning, URL extraction, structural score
-│   ├── database_service.dart          # SQLite CRUD (logs, trusted, cache)
+│   ├── database_service.dart          # SQLite CRUD (logs, trusted, cache, blocked)
 │   ├── notification_service.dart      # Local notifications (fraud + suspicious)
 │   └── domain_intelligence/
 │       ├── domain_intelligence.dart   # DIM orchestrator (parallel URL analysis)
@@ -454,8 +553,9 @@ lib/
 ├── nlp/
 │   └── nlp_classifier.dart            # TFLite inference + keyword fallback
 └── ui/
-    ├── dashboard_screen.dart          # Stats, pie chart, recent alerts
+    ├── dashboard_screen.dart          # Stats, pie chart, blocked banner, recent alerts
     ├── alert_screen.dart              # Score breakdown, URLs, rules, actions
+    ├── blocked_screen.dart            # Auto-blocked fraud messages with unblock
     ├── history_screen.dart            # Full log with risk-level filters
     ├── settings_screen.dart           # Trusted senders, scan inbox, data mgmt
     └── widgets/
@@ -482,7 +582,7 @@ test/
 
 ---
 
-## 10. Tech Stack
+## 11. Tech Stack
 
 | Component | Technology | Version |
 |-----------|------------|---------|
@@ -501,7 +601,7 @@ test/
 
 ---
 
-## 11. Getting Started
+## 12. Getting Started
 
 ### Prerequisites
 
@@ -544,7 +644,7 @@ flutter build apk --release
 
 ---
 
-## 12. Testing
+## 13. Testing
 
 ### Running Tests
 
@@ -564,16 +664,17 @@ flutter test
 
 ### Sample Test Messages
 
-| Message | Expected | Score |
-|---------|----------|-------|
-| "Your electricity bill Rs.2500 due immediately! Pay at http://bill-pay.xyz or disconnection TODAY!" | FRAUD | >0.80 |
-| "Dear Customer, Rs.5000 debited from account. Bal: Rs.25000. -ICICI" | SAFE | <0.30 |
-| "Your account is blocked. Verify at http://verify.xyz" | FRAUD | >0.70 |
-| "Meeting at 3pm tomorrow. See you there!" | SAFE | <0.10 |
+| Message | Expected | Score | Action |
+|---------|----------|-------|--------|
+| "Your electricity bill Rs.2500 due immediately! Pay at http://bill-pay.xyz or disconnection TODAY!" | FRAUD | >0.80 | Auto-blocked + notification |
+| "Dear Customer, Rs.5000 debited from account. Bal: Rs.25000. -ICICI" | SAFE | <0.30 | None |
+| "Your account is blocked. Verify at http://verify.xyz" | FRAUD | >0.70 | Auto-blocked + notification |
+| "Update KYC details urgently" | SUSPICIOUS | 0.3-0.6 | Warning notification |
+| "Meeting at 3pm tomorrow. See you there!" | SAFE | <0.10 | None |
 
 ---
 
-## 13. References
+## 14. References
 
 1. Jisasoftech. (2025). *How India's fintech fraud patterns are evolving in 2025.*
 2. TensorFlow. *TensorFlow Lite for mobile machine learning.* https://www.tensorflow.org/lite
