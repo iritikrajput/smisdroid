@@ -6,6 +6,7 @@ import '../core/constants/app_strings.dart';
 import '../models/sms_analysis_result.dart';
 import 'risk_engine.dart';
 import 'notification_service.dart';
+import 'database_service.dart';
 
 typedef SmsCallback = void Function(SmsAnalysisResult result);
 
@@ -156,17 +157,23 @@ Future<void> _backgroundMessageHandler(SmsMessage message) async {
     sender: message.address ?? 'Unknown',
   );
 
-  if (result.riskLevel != 'SAFE') {
-    AppLogger.warning(
-      'Background SMS flagged as ${result.riskLevel}',
-      tag: 'SMS',
-    );
+  await NotificationService.initialize();
 
-    await NotificationService.initialize();
+  if (result.riskLevel == 'FRAUD') {
+    // Auto-block fraud messages
+    await DatabaseService.blockMessage(result);
+    AppLogger.warning('Background SMS BLOCKED as FRAUD', tag: 'SMS');
+
     NotificationService.showFraudAlert(
-      title: result.riskLevel == 'FRAUD'
-          ? AppStrings.fraudAlertTitle
-          : AppStrings.suspiciousAlertTitle,
+      title: AppStrings.fraudAlertTitle,
+      body: 'Blocked message from: ${result.sender}',
+      payload: result.originalMessage,
+    );
+  } else if (result.riskLevel == 'SUSPICIOUS') {
+    AppLogger.warning('Background SMS flagged as SUSPICIOUS', tag: 'SMS');
+
+    NotificationService.showSuspiciousAlert(
+      title: AppStrings.suspiciousAlertTitle,
       body: 'From: ${result.sender}',
       payload: result.originalMessage,
     );

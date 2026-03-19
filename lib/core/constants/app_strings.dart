@@ -87,6 +87,10 @@ class AppStrings {
   static const String suspiciousTld = 'Suspicious TLD';
   static const String brandImpersonation = 'Brand Impersonation';
 
+  // Blocked
+  static const String blockedMessages = 'Blocked Messages';
+  static const String blockedAlertTitle = 'Message Blocked!';
+
   // Stats
   static const String today = 'Today';
   static const String thisWeek = 'This Week';

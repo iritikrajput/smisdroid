@@ -5,6 +5,7 @@ import 'core/constants/app_strings.dart';
 import 'ui/dashboard_screen.dart';
 import 'services/sms_listener.dart';
 import 'services/notification_service.dart';
+import 'services/database_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,12 +42,17 @@ class _SMISDroidAppState extends State<SMISDroidApp> {
     // Start SMS listening
     await _smsListener.startListening(
       onSmsAnalyzed: (result) {
-        // Show notification for suspicious/fraud messages
-        if (result.riskLevel != 'SAFE') {
+        if (result.riskLevel == 'FRAUD') {
+          // Auto-block fraud messages
+          DatabaseService.blockMessage(result);
           NotificationService.showFraudAlert(
-            title: result.riskLevel == 'FRAUD'
-                ? AppStrings.fraudAlertTitle
-                : AppStrings.suspiciousAlertTitle,
+            title: AppStrings.fraudAlertTitle,
+            body: 'Blocked message from: ${result.sender}',
+            payload: result.originalMessage,
+          );
+        } else if (result.riskLevel == 'SUSPICIOUS') {
+          NotificationService.showSuspiciousAlert(
+            title: AppStrings.suspiciousAlertTitle,
             body: 'From: ${result.sender}',
             payload: result.originalMessage,
           );

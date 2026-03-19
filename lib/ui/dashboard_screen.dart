@@ -6,6 +6,7 @@ import '../core/utils/extensions.dart';
 import '../services/database_service.dart';
 import '../services/sms_listener.dart';
 import 'alert_screen.dart';
+import 'blocked_screen.dart';
 import 'history_screen.dart';
 import 'settings_screen.dart';
 import 'widgets/stat_card.dart';
@@ -22,6 +23,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final SmsListener _smsListener = SmsListener();
   Map<String, int> _stats = {'total': 0, 'fraud': 0, 'suspicious': 0, 'safe': 0};
   List<Map<String, dynamic>> _recentLogs = [];
+  int _blockedCount = 0;
   bool _isLoading = true;
 
   @override
@@ -37,10 +39,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       final stats = await DatabaseService.getStats();
       final logs = await DatabaseService.getRecentLogs(limit: 10);
+      final blocked = await DatabaseService.getBlockedCount();
 
       setState(() {
         _stats = stats;
         _recentLogs = logs;
+        _blockedCount = blocked;
         _isLoading = false;
       });
     } catch (e) {
@@ -88,6 +92,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   children: [
                     _buildStatsSection(),
                     const SizedBox(height: 24),
+                    if (_blockedCount > 0) ...[
+                      _buildBlockedBanner(),
+                      const SizedBox(height: 24),
+                    ],
                     _buildChartSection(),
                     const SizedBox(height: 24),
                     _buildRecentAlertsSection(),
@@ -261,6 +269,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildBlockedBanner() {
+    return InkWell(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const BlockedScreen()),
+        );
+      },
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: AppColors.dangerGradient,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.block, color: Colors.white, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$_blockedCount Blocked Message${_blockedCount == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Fraudulent messages automatically blocked',
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white70),
+          ],
+        ),
+      ),
     );
   }
 

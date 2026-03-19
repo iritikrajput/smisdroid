@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(flutter pub get:*)",
+      "Bash(flutter clean:*)",
+      "Bash(flutter run)",
+      "Bash(/home/ritikrajput/Android/Sdk/cmdline-tools/latest/bin/sdkmanager:*)",
+      "Bash(flutter build:*)",
+      "Bash(flutter --version)",
+      "Bash(flutter pub:*)",
+      "Bash(find /home/ritikrajput/Documents/smisdroid/android/app/src/main -type f -name *.java -o -type f -name *.kt)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter test:*)"
+    ]
+  }
+}

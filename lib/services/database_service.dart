@@ -14,7 +14,7 @@ class DatabaseService {
     final path = join(await getDatabasesPath(), 'smisdroid.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE fraud_logs (
@@ -47,6 +47,37 @@ class DatabaseService {
             cached_at TEXT
           )
         ''');
+
+        await db.execute('''
+          CREATE TABLE blocked_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender TEXT,
+            message TEXT,
+            risk_score REAL,
+            urls TEXT,
+            rules TEXT,
+            domain_score INTEGER,
+            nlp_score REAL,
+            blocked_at TEXT
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS blocked_messages (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              sender TEXT,
+              message TEXT,
+              risk_score REAL,
+              urls TEXT,
+              rules TEXT,
+              domain_score INTEGER,
+              nlp_score REAL,
+              blocked_at TEXT
+            )
+          ''');
+        }
       },
     );
   }
@@ -198,5 +229,43 @@ class DatabaseService {
   static Future<void> clearHistory() async {
     final db = await database;
     await db.delete('fraud_logs');
+  }
+
+  // Blocked Messages
+  static Future<void> blockMessage(SmsAnalysisResult result) async {
+    final db = await database;
+    await db.insert('blocked_messages', {
+      'sender': result.sender,
+      'message': result.originalMessage,
+      'risk_score': result.riskScore,
+      'urls': result.detectedUrls.join(','),
+      'rules': result.triggeredRules.join('|'),
+      'domain_score': result.domainScore,
+      'nlp_score': result.nlpScore,
+      'blocked_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getBlockedMessages() async {
+    final db = await database;
+    return db.query('blocked_messages', orderBy: 'id DESC');
+  }
+
+  static Future<int> getBlockedCount() async {
+    final db = await database;
+    return Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM blocked_messages'),
+        ) ??
+        0;
+  }
+
+  static Future<void> unblockMessage(int id) async {
+    final db = await database;
+    await db.delete('blocked_messages', where: 'id = ?', whereArgs: [id]);
+  }
+
+  static Future<void> clearBlocked() async {
+    final db = await database;
+    await db.delete('blocked_messages');
   }
 }
