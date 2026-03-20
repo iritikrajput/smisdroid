@@ -12,7 +12,15 @@
       "Bash(flutter pub:*)",
       "Bash(find /home/ritikrajput/Documents/smisdroid/android/app/src/main -type f -name *.java -o -type f -name *.kt)",
       "Bash(flutter analyze:*)",
-      "Bash(flutter test:*)"
+      "Bash(flutter test:*)",
+      "Bash(pip3 --version)",
+      "Bash(python3 -c \"import tensorflow; print\\(''TF:'', tensorflow.__version__\\)\")",
+      "Bash(python3 -c \"import sklearn; print\\(''sklearn:'', sklearn.__version__\\)\")",
+      "Bash(python3 -c \"import pandas; print\\(''pandas:'', pandas.__version__\\)\")",
+      "Bash(python3 -c \"import numpy; print\\(''numpy:'', numpy.__version__\\)\")",
+      "Bash(ls /home/ritikrajput/Documents/smisdroid/*.csv /home/ritikrajput/Documents/smisdroid/data/ /home/ritikrajput/Documents/smisdroid/dataset/)",
+      "Bash(wc -l /home/ritikrajput/Documents/smisdroid/model_training/datasets/*.csv)",
+      "Bash(pip install:*)"
     ]
   }
 }
