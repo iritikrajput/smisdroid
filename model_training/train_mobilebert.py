@@ -1,187 +1,215 @@
 #!/usr/bin/env python3
 """
-SMISDroid - MobileBERT Fine-Tuning Pipeline
+SMISDroid — MobileBERT Fine-Tuning Pipeline
 =============================================
 
-Fine-tunes MobileBERT (google/mobilebert-uncased) for SMS fraud detection,
-then exports to TensorFlow Lite for on-device inference.
+Fine-tunes MobileBERT (google/mobilebert-uncased) on train.csv for SMS fraud
+detection, then exports to quantized TensorFlow Lite for on-device inference.
 
-MobileBERT advantages over TF-IDF:
-  - Understands context and word order (not bag-of-words)
-  - Better at detecting paraphrased/novel fraud patterns
-  - Higher accuracy (93-96%)
-
-Trade-offs:
-  - Larger model (~25 MB quantized, vs ~100 KB for TF-IDF)
-  - Slower inference (~50ms vs ~15ms)
-  - Requires more training time and GPU recommended
+Dataset: train.csv with columns (message_text, class_label)
+Labels:  benign -> 0, all fraud types -> 1
 
 Usage:
-    pip install -r requirements.txt
+    # Activate virtual environment
+    source model_training/venv/bin/activate
+
+    # Run training
+    cd model_training
     python train_mobilebert.py
 
-    # With GPU (recommended):
-    CUDA_VISIBLE_DEVICES=0 python train_mobilebert.py
+    # Output files are saved to output/ and copied to assets/
 
-    # On Google Colab:
-    !pip install -r requirements.txt
-    !python train_mobilebert.py
+Hardware:
+    - GPU recommended (~20 min on T4), CPU works (~30 min on modern CPU)
+    - ~4 GB RAM required
+
+Author: SMISDroid Development Team
+Date:   March 21, 2026
 """
 
 import os
 import json
+import random
+import shutil
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from transformers import MobileBertTokenizer, TFMobileBertForSequenceClassification
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
+from transformers import MobileBertTokenizer, TFMobileBertForSequenceClassification
 
-# ─── Config ───────────────────────────────────────────────
+# ─── Configuration ────────────────────────────────────────────
 
-DATASET_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets")
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flutter_assets")
-FINAL_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_PATH = os.path.join(BASE_DIR, "datasets", "train.csv")
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+ASSETS_DIR = os.path.join(BASE_DIR, "..", "assets")
 
 MODEL_NAME = "google/mobilebert-uncased"
 MAX_SEQ_LENGTH = 128
+EPOCHS = 3
+BATCH_SIZE = 16
+LEARNING_RATE = 2e-5
 TEST_SPLIT = 0.2
 RANDOM_SEED = 42
-EPOCHS = 3              # MobileBERT converges fast with fine-tuning
-BATCH_SIZE = 16          # Lower batch size for memory
-LEARNING_RATE = 2e-5     # Standard BERT fine-tuning LR
 
-# ─── Data Loading (reuse from train_fraud_model.py) ──────
-
-def load_all_data():
-    """Import data loading from the base training script."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "train_fraud_model",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "train_fraud_model.py"),
-    )
-    base_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(base_module)
-    return base_module.load_all_data()
+VALID_LABELS = {
+    "benign",
+    "kyc_scam",
+    "impersonation",
+    "phishing_link",
+    "fake_payment_portal",
+    "account_block_scam",
+}
 
 
-# ─── Step 1: Tokenization ────────────────────────────────
+# ─── Step 1: Load and Clean Dataset ──────────────────────────
 
-def tokenize_data(texts, tokenizer):
-    """Tokenize texts using MobileBERT tokenizer."""
-    encodings = tokenizer(
-        texts.tolist(),
+def load_dataset(path):
+    """
+    Load train.csv and map to binary labels.
+    benign -> 0 (legitimate), all other labels -> 1 (fraud)
+    """
+    print(f"Loading dataset: {path}")
+    raw_df = pd.read_csv(path)
+    print(f"  Raw rows: {len(raw_df)}")
+
+    # Keep only valid rows
+    df = raw_df[["message_text", "class_label"]].dropna()
+    df = df[df["class_label"].isin(VALID_LABELS)].copy()
+
+    # Binary mapping
+    df["label"] = (df["class_label"] != "benign").astype(int)
+    df = df.rename(columns={"message_text": "text"})
+
+    # Deduplicate
+    df = df.drop_duplicates(subset=["text"])
+    df = df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+
+    print(f"  Cleaned rows: {len(df)}")
+    print(f"  Label distribution:")
+    for label in sorted(VALID_LABELS):
+        count = len(raw_df[raw_df["class_label"] == label])
+        mapping = "0 (Safe)" if label == "benign" else "1 (Fraud)"
+        print(f"    {label:25s} -> {mapping:12s} ({count} samples)")
+    print(f"  Binary: Fraud={df['label'].sum()} ({df['label'].mean()*100:.1f}%) "
+          f"| Safe={(df['label']==0).sum()} ({(df['label']==0).mean()*100:.1f}%)")
+
+    return df[["text", "label"]]
+
+
+# ─── Step 2: Tokenize ────────────────────────────────────────
+
+def tokenize(texts, tokenizer):
+    """Tokenize a list of texts using MobileBERT WordPiece tokenizer."""
+    return tokenizer(
+        texts,
         max_length=MAX_SEQ_LENGTH,
         padding="max_length",
         truncation=True,
         return_tensors="tf",
     )
-    return encodings
 
 
-# ─── Step 2: Create TF Dataset ───────────────────────────
+# ─── Step 3: Create TF Datasets ──────────────────────────────
 
-def create_tf_dataset(encodings, labels, batch_size, shuffle=True):
-    """Create a tf.data.Dataset from encodings and labels."""
-    dataset = tf.data.Dataset.from_tensor_slices((
+def make_tf_dataset(encodings, labels, batch_size, shuffle=False):
+    """Create a batched tf.data.Dataset from tokenized encodings."""
+    ds = tf.data.Dataset.from_tensor_slices((
         {
             "input_ids": encodings["input_ids"],
             "attention_mask": encodings["attention_mask"],
             "token_type_ids": encodings["token_type_ids"],
         },
-        labels,
+        np.array(labels),
     ))
-
     if shuffle:
-        dataset = dataset.shuffle(buffer_size=len(labels))
-
-    dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    return dataset
+        ds = ds.shuffle(len(labels), seed=RANDOM_SEED)
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 
-# ─── Step 3: Fine-Tune MobileBERT ────────────────────────
+# ─── Step 4: Fine-Tune ───────────────────────────────────────
 
-def fine_tune_model(train_dataset, val_dataset, num_train_steps):
-    """Load and fine-tune MobileBERT for binary classification."""
-    print(f"\n[MODEL] Loading {MODEL_NAME}...")
+def train_model(train_ds, val_ds):
+    """Load pre-trained MobileBERT and fine-tune on SMS data."""
     model = TFMobileBertForSequenceClassification.from_pretrained(
-        MODEL_NAME,
-        num_labels=2,
+        MODEL_NAME, num_labels=2
     )
-
-    # Optimizer with linear decay
-    optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
-    loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-
     model.compile(
-        optimizer=optimizer,
-        loss=loss,
+        optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
+        loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
         metrics=["accuracy"],
     )
+    print(f"  Parameters: {model.count_params():,}")
 
-    print(f"[MODEL] Parameters: {model.count_params():,}")
-
-    # Train
     history = model.fit(
-        train_dataset,
-        validation_data=val_dataset,
+        train_ds,
+        validation_data=val_ds,
         epochs=EPOCHS,
         verbose=1,
     )
-
     return model, history
 
 
-# ─── Step 4: Export to TFLite ─────────────────────────────
+# ─── Step 5: Evaluate ────────────────────────────────────────
 
-def export_to_tflite(model, tokenizer, output_path):
+def evaluate(model, val_ds, y_test):
+    """Run evaluation and print classification report."""
+    preds = model.predict(val_ds)
+    y_pred = np.argmax(preds.logits, axis=-1)
+
+    print(classification_report(y_test, y_pred, target_names=["Legitimate", "Fraud"]))
+
+    cm = confusion_matrix(y_test, y_pred)
+    print(f"Confusion Matrix:")
+    print(f"  TN={cm[0][0]:>5}  FP={cm[0][1]:>5}")
+    print(f"  FN={cm[1][0]:>5}  TP={cm[1][1]:>5}")
+
+    accuracy = (cm[0][0] + cm[1][1]) / cm.sum()
+    print(f"\nAccuracy:  {accuracy*100:.2f}%")
+    print(f"Precision: {cm[1][1]/(cm[1][1]+cm[0][1])*100:.2f}%")
+    print(f"Recall:    {cm[1][1]/(cm[1][1]+cm[1][0])*100:.2f}%")
+    f1 = 2*cm[1][1] / (2*cm[1][1] + cm[0][1] + cm[1][0])
+    print(f"F1-Score:  {f1*100:.2f}%")
+
+    return y_pred, cm
+
+
+# ─── Step 6: Export TFLite ────────────────────────────────────
+
+def export_tflite(model, output_path):
     """
-    Export MobileBERT to TFLite with quantization.
-
-    We create a wrapper that takes input_ids as input and outputs
-    a single fraud probability float — matching the Dart NlpClassifier interface.
+    Export model to quantized TFLite format.
+    Wraps model to accept only input_ids and output fraud probability.
     """
-    print("\n[EXPORT] Converting to TFLite...")
-
-    # Create a concrete function with fixed input signature
     class TFLiteWrapper(tf.Module):
         def __init__(self, model):
             super().__init__()
             self.model = model
 
         @tf.function(input_signature=[
-            tf.TensorSpec(shape=[1, MAX_SEQ_LENGTH], dtype=tf.int32, name="input_ids"),
+            tf.TensorSpec(shape=[1, MAX_SEQ_LENGTH], dtype=tf.int32, name="input_ids")
         ])
         def predict(self, input_ids):
-            # Create attention mask (non-zero = attended)
             attention_mask = tf.cast(tf.not_equal(input_ids, 0), tf.int32)
             token_type_ids = tf.zeros_like(input_ids)
-
             outputs = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 training=False,
             )
-            logits = outputs.logits
-            # Softmax to get probabilities, return fraud probability (class 1)
-            probs = tf.nn.softmax(logits, axis=-1)
-            fraud_prob = probs[:, 1:2]  # Shape [1, 1]
-            return fraud_prob
+            probs = tf.nn.softmax(outputs.logits, axis=-1)
+            return probs[:, 1:2]  # Fraud probability only
 
     wrapper = TFLiteWrapper(model)
-
-    # Get concrete function
     concrete_func = wrapper.predict.get_concrete_function()
 
-    # Convert
     converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete_func])
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
-
-    # Dynamic range quantization (good balance of size and accuracy)
     converter.target_spec.supported_ops = [
         tf.lite.OpsSet.TFLITE_BUILTINS,
-        tf.lite.OpsSet.SELECT_TF_OPS,  # Needed for some BERT ops
+        tf.lite.OpsSet.SELECT_TF_OPS,
     ]
     converter._experimental_lower_tensor_list_ops = False
 
@@ -190,173 +218,188 @@ def export_to_tflite(model, tokenizer, output_path):
     with open(output_path, "wb") as f:
         f.write(tflite_model)
 
-    size_mb = len(tflite_model) / (1024 * 1024)
-    print(f"[EXPORT] TFLite model saved: {output_path} ({size_mb:.1f} MB)")
+    size_mb = len(tflite_model) / 1024 / 1024
+    print(f"  Model saved: {output_path} ({size_mb:.1f} MB)")
     return tflite_model
 
 
-def export_vocabulary_for_bert(tokenizer, output_path):
-    """
-    Export a vocabulary mapping for the Dart NlpClassifier.
+# ─── Step 7: Verify TFLite ───────────────────────────────────
 
-    For MobileBERT, the Dart side needs to use the tokenizer's vocab
-    to convert words to input_ids.
-    """
+def verify_tflite(tflite_path, tokenizer, X_test, y_test):
+    """Run all test samples through TFLite interpreter and report accuracy."""
+    interp = tf.lite.Interpreter(model_path=tflite_path)
+    interp.allocate_tensors()
+    inp_d = interp.get_input_details()
+    out_d = interp.get_output_details()
+
+    correct = 0
+    n = len(X_test)
+
+    for i in range(n):
+        tokens = tokenizer(
+            X_test[i], max_length=MAX_SEQ_LENGTH,
+            padding="max_length", truncation=True, return_tensors="np"
+        )
+        interp.set_tensor(inp_d[0]["index"], tokens["input_ids"].astype(np.int32))
+        interp.invoke()
+        score = interp.get_tensor(out_d[0]["index"])[0][0]
+        if (1 if score > 0.5 else 0) == y_test[i]:
+            correct += 1
+        if (i + 1) % 300 == 0:
+            print(f"    {i+1}/{n} — {correct/(i+1)*100:.1f}%")
+
+    accuracy = correct / n * 100
+    print(f"  TFLite accuracy: {correct}/{n} ({accuracy:.2f}%)")
+    return correct, n
+
+
+# ─── Step 8: Export Assets ────────────────────────────────────
+
+def export_assets(tokenizer, model, tflite_model, correct, n_test):
+    """Export vocabulary, config, and weights metadata."""
+    # Vocabulary
     vocab = tokenizer.get_vocab()
-    # Sort by index
     sorted_vocab = {k: int(v) for k, v in sorted(vocab.items(), key=lambda x: x[1])}
-
-    with open(output_path, "w") as f:
+    vocab_path = os.path.join(OUTPUT_DIR, "vocabulary.json")
+    with open(vocab_path, "w") as f:
         json.dump(sorted_vocab, f)
+    print(f"  Vocabulary: {vocab_path} ({len(sorted_vocab)} tokens)")
 
-    print(f"[EXPORT] Vocabulary saved: {output_path} ({len(sorted_vocab)} tokens)")
-
-
-def export_config_for_bert(output_path):
-    """Export config for Dart NlpClassifier."""
+    # Config
     config = {
         "model_type": "mobilebert",
         "model_name": MODEL_NAME,
         "max_seq_length": MAX_SEQ_LENGTH,
+        "vocab_size": tokenizer.vocab_size,
         "input_type": "token_ids",
         "output_type": "fraud_probability",
         "threshold_safe": 0.3,
         "threshold_suspicious": 0.6,
-        "pad_token_id": 0,
-        "cls_token_id": 101,
-        "sep_token_id": 102,
+        "pad_token_id": tokenizer.pad_token_id,
+        "cls_token_id": tokenizer.cls_token_id,
+        "sep_token_id": tokenizer.sep_token_id,
+        "unk_token_id": tokenizer.unk_token_id,
         "version": "1.0.0",
+        "training": {
+            "epochs": EPOCHS,
+            "batch_size": BATCH_SIZE,
+            "learning_rate": LEARNING_RATE,
+            "train_samples": int(n_test / TEST_SPLIT * (1 - TEST_SPLIT)),
+            "test_samples": n_test,
+            "test_accuracy": round(correct / n_test, 4),
+        },
     }
-    with open(output_path, "w") as f:
+    config_path = os.path.join(OUTPUT_DIR, "nlp_config.json")
+    with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
-    print(f"[EXPORT] Config saved: {output_path}")
+    print(f"  Config: {config_path}")
+
+    # Weights metadata
+    weights = {
+        "type": "mobilebert",
+        "base_model": MODEL_NAME,
+        "total_params": int(model.count_params()),
+        "quantization": "dynamic_range",
+        "tflite_size_bytes": len(tflite_model),
+    }
+    weights_path = os.path.join(OUTPUT_DIR, "model_weights.json")
+    with open(weights_path, "w") as f:
+        json.dump(weights, f, indent=2)
+    print(f"  Weights: {weights_path}")
 
 
-# ─── Step 5: Verify TFLite ───────────────────────────────
+# ─── Step 9: Copy to Flutter Assets ──────────────────────────
 
-def verify_tflite(tflite_path, tokenizer, test_messages, test_labels):
-    """Verify TFLite model accuracy."""
-    interpreter = tf.lite.Interpreter(model_path=tflite_path)
-    interpreter.allocate_tensors()
-
-    input_details = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
-
-    n_test = min(100, len(test_messages))
-    correct = 0
-
-    for i in range(n_test):
-        tokens = tokenizer(
-            test_messages.iloc[i],
-            max_length=MAX_SEQ_LENGTH,
-            padding="max_length",
-            truncation=True,
-            return_tensors="np",
-        )
-
-        input_ids = tokens["input_ids"].astype(np.int32)
-        interpreter.set_tensor(input_details[0]["index"], input_ids)
-        interpreter.invoke()
-        output = interpreter.get_tensor(output_details[0]["index"])
-
-        pred = 1 if output[0][0] > 0.5 else 0
-        if pred == test_labels.iloc[i]:
-            correct += 1
-
-    accuracy = correct / n_test * 100
-    print(f"\n[VERIFY] TFLite accuracy on {n_test} samples: {accuracy:.1f}%")
-    return accuracy
+def copy_to_assets():
+    """Copy output files to the Flutter assets directory."""
+    copies = [
+        ("fraud_model.tflite", os.path.join(ASSETS_DIR, "models")),
+        ("vocabulary.json", os.path.join(ASSETS_DIR, "nlp")),
+        ("nlp_config.json", os.path.join(ASSETS_DIR, "nlp")),
+        ("model_weights.json", os.path.join(ASSETS_DIR, "nlp")),
+    ]
+    for filename, dst_dir in copies:
+        src = os.path.join(OUTPUT_DIR, filename)
+        os.makedirs(dst_dir, exist_ok=True)
+        dst = os.path.join(dst_dir, filename)
+        shutil.copy2(src, dst)
+        size_kb = os.path.getsize(dst) / 1024
+        print(f"  -> {dst} ({size_kb:.1f} KB)")
 
 
-# ─── Main Pipeline ────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────
 
 def main():
     print("=" * 60)
-    print("  SMISDroid - MobileBERT Fine-Tuning Pipeline")
+    print("  SMISDroid — MobileBERT Training Pipeline")
     print("=" * 60)
+    print(f"TensorFlow: {tf.__version__}")
 
-    # Check GPU
+    # GPU check
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
-        print(f"\n[GPU] Found {len(gpus)} GPU(s): {gpus}")
+        print(f"GPU: {gpus}")
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     else:
-        print("\n[GPU] No GPU found — training on CPU (will be slow)")
+        print("GPU: None — training on CPU")
 
-    # Step 1: Load data
-    print("\n--- Step 1: Loading datasets ---")
-    df = load_all_data()
-
-    # Step 2: Tokenize
-    print("\n--- Step 2: Tokenizing with MobileBERT ---")
-    tokenizer = MobileBertTokenizer.from_pretrained(MODEL_NAME)
-
-    X_train_text, X_test_text, y_train, y_test = train_test_split(
-        df["text"], df["label"].astype(int),
-        test_size=TEST_SPLIT, random_state=RANDOM_SEED, stratify=df["label"],
-    )
-
-    print(f"[SPLIT] Train: {len(X_train_text)}, Test: {len(X_test_text)}")
-
-    train_encodings = tokenize_data(X_train_text, tokenizer)
-    test_encodings = tokenize_data(X_test_text, tokenizer)
-
-    train_dataset = create_tf_dataset(train_encodings, y_train.values, BATCH_SIZE, shuffle=True)
-    val_dataset = create_tf_dataset(test_encodings, y_test.values, BATCH_SIZE, shuffle=False)
-
-    # Step 3: Fine-tune
-    print("\n--- Step 3: Fine-Tuning MobileBERT ---")
-    num_train_steps = len(X_train_text) // BATCH_SIZE * EPOCHS
-    model, history = fine_tune_model(train_dataset, val_dataset, num_train_steps)
-
-    # Step 4: Evaluate
-    print("\n--- Step 4: Evaluation ---")
-    predictions = model.predict(val_dataset)
-    y_pred = np.argmax(predictions.logits, axis=-1)
-
-    print("\nClassification Report:")
-    print(classification_report(y_test, y_pred, target_names=["Legitimate", "Fraud"]))
-
-    cm = confusion_matrix(y_test, y_pred)
-    print(f"Confusion Matrix:")
-    print(f"  TN={cm[0][0]}  FP={cm[0][1]}")
-    print(f"  FN={cm[1][0]}  TP={cm[1][1]}")
-
-    # Step 5: Export
-    print("\n--- Step 5: Exporting to TFLite ---")
+    # Seed everything
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    tf.random.set_seed(RANDOM_SEED)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    # Step 1: Load dataset
+    print("\n--- Step 1: Loading Dataset ---")
+    df = load_dataset(DATASET_PATH)
+
+    # Step 2: Split
+    print("\n--- Step 2: Train/Test Split ---")
+    X_train, X_test, y_train, y_test = train_test_split(
+        df["text"].tolist(), df["label"].tolist(),
+        test_size=TEST_SPLIT, random_state=RANDOM_SEED, stratify=df["label"],
+    )
+    print(f"  Train: {len(X_train)} | Test: {len(X_test)}")
+
+    # Step 3: Tokenize
+    print("\n--- Step 3: Tokenizing ---")
+    tokenizer = MobileBertTokenizer.from_pretrained(MODEL_NAME)
+    train_enc = tokenize(X_train, tokenizer)
+    test_enc = tokenize(X_test, tokenizer)
+    print(f"  Train shape: {train_enc['input_ids'].shape}")
+    print(f"  Test shape:  {test_enc['input_ids'].shape}")
+
+    train_ds = make_tf_dataset(train_enc, y_train, BATCH_SIZE, shuffle=True)
+    val_ds = make_tf_dataset(test_enc, y_test, BATCH_SIZE, shuffle=False)
+
+    # Step 4: Fine-tune
+    print("\n--- Step 4: Fine-Tuning MobileBERT ---")
+    model, history = train_model(train_ds, val_ds)
+
+    # Step 5: Evaluate
+    print("\n--- Step 5: Evaluation ---")
+    y_pred, cm = evaluate(model, val_ds, y_test)
+
+    # Step 6: Export TFLite
+    print("\n--- Step 6: Exporting TFLite ---")
     tflite_path = os.path.join(OUTPUT_DIR, "fraud_model.tflite")
-    export_to_tflite(model, tokenizer, tflite_path)
-    export_vocabulary_for_bert(tokenizer, os.path.join(OUTPUT_DIR, "vocabulary.json"))
-    export_config_for_bert(os.path.join(OUTPUT_DIR, "nlp_config.json"))
+    tflite_model = export_tflite(model, tflite_path)
 
-    weights_info = {"type": "mobilebert", "params": int(model.count_params())}
-    with open(os.path.join(OUTPUT_DIR, "model_weights.json"), "w") as f:
-        json.dump(weights_info, f, indent=2)
+    # Step 7: Verify TFLite
+    print("\n--- Step 7: Verifying TFLite ---")
+    correct, n_test = verify_tflite(tflite_path, tokenizer, X_test, y_test)
 
-    # Step 6: Verify
-    print("\n--- Step 6: TFLite Verification ---")
-    verify_tflite(tflite_path, tokenizer, X_test_text, y_test)
+    # Step 8: Export assets
+    print("\n--- Step 8: Exporting Flutter Assets ---")
+    export_assets(tokenizer, model, tflite_model, correct, n_test)
 
-    # Step 7: Copy to Flutter assets
-    print("\n--- Step 7: Copying to Flutter assets ---")
-    import shutil
-    for src_name, dst_dir in [
-        ("fraud_model.tflite", os.path.join(FINAL_ASSETS, "models")),
-        ("vocabulary.json", os.path.join(FINAL_ASSETS, "nlp")),
-        ("nlp_config.json", os.path.join(FINAL_ASSETS, "nlp")),
-        ("model_weights.json", os.path.join(FINAL_ASSETS, "nlp")),
-    ]:
-        src = os.path.join(OUTPUT_DIR, src_name)
-        dst = os.path.join(dst_dir, src_name)
-        shutil.copy2(src, dst)
-        print(f"  -> {dst}")
+    # Step 9: Copy to Flutter assets
+    print("\n--- Step 9: Copying to Flutter Assets ---")
+    copy_to_assets()
 
     print("\n" + "=" * 60)
-    print("  MOBILEBERT TRAINING COMPLETE!")
-    print("  Run 'flutter build apk --debug' to use the new model")
+    print("  DONE! Run: flutter build apk --debug")
     print("=" * 60)
 
 

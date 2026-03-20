@@ -1,0 +1,23 @@
+{
+  "model_type": "mobilebert",
+  "model_name": "google/mobilebert-uncased",
+  "max_seq_length": 128,
+  "vocab_size": 30522,
+  "input_type": "token_ids",
+  "output_type": "fraud_probability",
+  "threshold_safe": 0.3,
+  "threshold_suspicious": 0.6,
+  "pad_token_id": 0,
+  "cls_token_id": 101,
+  "sep_token_id": 102,
+  "unk_token_id": 100,
+  "version": "1.0.0",
+  "training": {
+    "epochs": 3,
+    "batch_size": 16,
+    "learning_rate": 2e-05,
+    "train_samples": 5391,
+    "test_samples": 1348,
+    "test_accuracy": 0.997
+  }
+}

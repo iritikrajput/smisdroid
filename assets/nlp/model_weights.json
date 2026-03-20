@@ -1,0 +1,7 @@
+{
+  "type": "mobilebert",
+  "base_model": "google/mobilebert-uncased",
+  "total_params": 24582914,
+  "quantization": "dynamic_range",
+  "tflite_size_bytes": 26728656
+}
