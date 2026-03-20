@@ -44,5 +44,19 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Model training
 model_training/venv/
+model_training/output/
+model_training/datasets/
+model_training/.ipynb_checkpoints/
+model_training/__pycache__/
+
+# Python
 venv/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Large files (keep assets/ versions for the app)
+model_training/**/*.tflite
