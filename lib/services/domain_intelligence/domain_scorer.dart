@@ -5,10 +5,17 @@ import 'whois_analyzer.dart';
 
 /// Combines all signals into a 0–100 risk score with full explanation
 class DomainScorer {
+  // Top phishing TLDs (ANY.RUN 2025 + known abuse TLDs)
+  static const List<String> _highRiskTLDs = [
+    '.li', '.es', '.sbs', '.dev', '.cfd', '.ru', '.pub', '.so',
+    '.app', '.icu', '.re', '.ua', '.online', '.link', '.top',
+    '.ly', '.site', '.ro', '.click', '.ar',
+    '.xyz', '.vip',
+  ];
   static const List<String> _suspiciousTLDs = [
-    '.xyz', '.top', '.tk', '.ml', '.cf', '.ga', '.gq',
-    '.pw', '.buzz', '.click', '.link', '.stream',
-    '.download', '.loan', '.win', '.review', '.party',
+    // Legacy abuse TLDs
+    '.tk', '.ml', '.cf', '.ga', '.gq', '.pw', '.buzz',
+    '.stream', '.download', '.loan', '.win', '.review', '.party',
   ];
 
   static const List<String> _trustedBrands = [
@@ -62,7 +69,15 @@ class DomainScorer {
     }
 
     // ── 2. TLD reputation ──────────────────────────────────────
-    if (_suspiciousTLDs.contains(tld)) {
+    if (_highRiskTLDs.contains(tld)) {
+      score += 30;
+      indicators.add(ScoringIndicator(
+        category: 'TLD',
+        description: 'High-risk phishing TLD: $tld (top 20 phishing TLDs 2025)',
+        points: 30,
+        severity: Severity.critical,
+      ));
+    } else if (_suspiciousTLDs.contains(tld)) {
       score += 25;
       indicators.add(ScoringIndicator(
         category: 'TLD',
@@ -212,10 +227,16 @@ class DomainScorer {
       score: score.clamp(0, 100),
       indicators: indicators,
       ipAddresses: dns.ipAddresses,
+      nameservers: dns.nameservers,
+      hasMxRecord: dns.hasMxRecord,
+      hasSPF: dns.hasSPF,
+      hasDMARC: dns.hasDMARC,
+      rawDnsRecords: dns.rawRecords,
       registrar: whois.registrar,
       domainAge: whois.ageDescription,
       createdDate: whois.createdDate,
-      nameservers: dns.nameservers,
+      expiresDate: whois.expiresDate,
+      statusFlags: whois.statusFlags,
     );
   }
 
@@ -343,11 +364,28 @@ class DomainScore {
   final String finalUrl;
   final int score;
   final List<ScoringIndicator> indicators;
+
+  // DNS records
   final List<String> ipAddresses;
+  final List<String> nameservers;
+  final bool hasMxRecord;
+  final bool hasSPF;
+  final bool hasDMARC;
+  final Map<String, List<String>> rawDnsRecords;
+
+  // WHOIS / Registrar info
   final String registrar;
   final String domainAge;
   final DateTime? createdDate;
-  final List<String> nameservers;
+  final DateTime? expiresDate;
+  final List<String> statusFlags;
+
+  // Hosting provider
+  final String hostingProvider;
+  final String hostingIsp;
+  final String hostingAsn;
+  final String hostingCountry;
+  final bool isHostingProvider;
 
   DomainScore({
     required this.domain,
@@ -356,10 +394,21 @@ class DomainScore {
     required this.score,
     required this.indicators,
     required this.ipAddresses,
+    required this.nameservers,
+    this.hasMxRecord = false,
+    this.hasSPF = false,
+    this.hasDMARC = false,
+    this.rawDnsRecords = const {},
     required this.registrar,
     required this.domainAge,
     required this.createdDate,
-    required this.nameservers,
+    this.expiresDate,
+    this.statusFlags = const [],
+    this.hostingProvider = 'Unknown',
+    this.hostingIsp = 'Unknown',
+    this.hostingAsn = 'Unknown',
+    this.hostingCountry = 'Unknown',
+    this.isHostingProvider = false,
   });
 
   String get riskLevel {

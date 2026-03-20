@@ -20,7 +20,8 @@
       "Bash(python3 -c \"import numpy; print\\(''numpy:'', numpy.__version__\\)\")",
       "Bash(ls /home/ritikrajput/Documents/smisdroid/*.csv /home/ritikrajput/Documents/smisdroid/data/ /home/ritikrajput/Documents/smisdroid/dataset/)",
       "Bash(wc -l /home/ritikrajput/Documents/smisdroid/model_training/datasets/*.csv)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git push:*)"
     ]
   }
 }

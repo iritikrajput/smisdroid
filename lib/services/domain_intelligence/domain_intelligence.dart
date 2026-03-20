@@ -35,13 +35,11 @@ class DomainIntelligence {
   }
 
   static Future<DomainScore> _analyzeUrl(String url) async {
-    // All 3 analyses run concurrently for speed
-    final redirectFuture = UrlResolver.resolveRedirectChain(url);
-    final redirect = await redirectFuture;
-
+    // Step 1: Resolve redirect chain
+    final redirect = await UrlResolver.resolveRedirectChain(url);
     final domain = redirect.finalDomain;
 
-    // DNS + WHOIS in parallel after we know the final domain
+    // Step 2: DNS + WHOIS in parallel
     final results = await Future.wait([
       DnsAnalyzer.analyze(domain),
       WhoisAnalyzer.lookup(domain),
@@ -50,11 +48,46 @@ class DomainIntelligence {
     final dns   = results[0] as DnsAnalysisResult;
     final whois = results[1] as WhoisResult;
 
-    return DomainScorer.calculate(
+    // Step 3: Score the domain
+    var domainScore = DomainScorer.calculate(
       redirect: redirect,
       dns: dns,
       whois: whois,
     );
+
+    // Step 4: Lookup hosting provider from first IP (non-blocking)
+    if (dns.ipAddresses.isNotEmpty) {
+      try {
+        final hosting = await DnsAnalyzer.lookupHosting(dns.ipAddresses.first);
+        domainScore = DomainScore(
+          domain: domainScore.domain,
+          originalUrl: domainScore.originalUrl,
+          finalUrl: domainScore.finalUrl,
+          score: domainScore.score,
+          indicators: domainScore.indicators,
+          ipAddresses: domainScore.ipAddresses,
+          nameservers: domainScore.nameservers,
+          hasMxRecord: domainScore.hasMxRecord,
+          hasSPF: domainScore.hasSPF,
+          hasDMARC: domainScore.hasDMARC,
+          rawDnsRecords: domainScore.rawDnsRecords,
+          registrar: domainScore.registrar,
+          domainAge: domainScore.domainAge,
+          createdDate: domainScore.createdDate,
+          expiresDate: domainScore.expiresDate,
+          statusFlags: domainScore.statusFlags,
+          hostingProvider: hosting.org,
+          hostingIsp: hosting.isp,
+          hostingAsn: hosting.asn,
+          hostingCountry: hosting.country,
+          isHostingProvider: hosting.isHosting,
+        );
+      } catch (_) {
+        // Hosting lookup failed — non-critical, continue with defaults
+      }
+    }
+
+    return domainScore;
   }
 
   static String _buildSummary(List<DomainScore> results) {

@@ -122,12 +122,37 @@ class DnsAnalyzer {
 
   static bool _checkFreeHosting(List<String> ns, List<String> ips) {
     const freeHostingNS = ['freenom', 'afraid.org', '000webhost', 'byethost'];
-    // Known Freenom IP ranges (simplified)
     const suspiciousIpPrefixes = ['197.231', '154.70', '41.215'];
 
     final nsMatch = ns.any((n) => freeHostingNS.any((f) => n.contains(f)));
     final ipMatch = ips.any((ip) => suspiciousIpPrefixes.any((p) => ip.startsWith(p)));
     return nsMatch || ipMatch;
+  }
+
+  /// Lookup hosting provider / ASN info for an IP address
+  /// Uses ip-api.com (free, no key, 45 req/min)
+  static Future<HostingInfo> lookupHosting(String ip) async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://ip-api.com/json/$ip?fields=status,org,isp,as,country,hosting'),
+      ).timeout(_timeout);
+
+      if (response.statusCode != 200) return HostingInfo.unknown(ip);
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (data['status'] != 'success') return HostingInfo.unknown(ip);
+
+      return HostingInfo(
+        ip: ip,
+        org: data['org'] as String? ?? 'Unknown',
+        isp: data['isp'] as String? ?? 'Unknown',
+        asn: data['as'] as String? ?? 'Unknown',
+        country: data['country'] as String? ?? 'Unknown',
+        isHosting: data['hosting'] as bool? ?? false,
+      );
+    } catch (_) {
+      return HostingInfo.unknown(ip);
+    }
   }
 }
 
@@ -183,4 +208,31 @@ class DnsAnalysisResult {
 
   /// Domains used purely for phishing rarely have MX or SPF records
   bool get hasSuspiciousDnsProfile => !hasMxRecord && !hasSPF && !hasDMARC;
+}
+
+class HostingInfo {
+  final String ip;
+  final String org;
+  final String isp;
+  final String asn;
+  final String country;
+  final bool isHosting;
+
+  HostingInfo({
+    required this.ip,
+    required this.org,
+    required this.isp,
+    required this.asn,
+    required this.country,
+    required this.isHosting,
+  });
+
+  factory HostingInfo.unknown(String ip) => HostingInfo(
+        ip: ip,
+        org: 'Unknown',
+        isp: 'Unknown',
+        asn: 'Unknown',
+        country: 'Unknown',
+        isHosting: false,
+      );
 }
