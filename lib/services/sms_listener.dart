@@ -23,6 +23,9 @@ class SmsListener {
   static const _smsEventChannel = EventChannel('com.example.smisdroid/sms_events');
   StreamSubscription? _nativeSubscription;
 
+  // Dedup: track recently analyzed messages to avoid double processing
+  final Set<String> _recentlyAnalyzed = {};
+
   SmsCallback? _onSmsAnalyzed;
   bool _isListening = false;
 
@@ -113,8 +116,21 @@ class SmsListener {
     AppLogger.sms('Stopped listening for SMS');
   }
 
-  /// Core analysis method — used by both native and telephony listeners
+  /// Core analysis method — used by both native and telephony listeners.
+  /// Deduplicates to avoid double processing from both listeners.
   Future<void> _analyzeAndNotify(String sender, String body) async {
+    // Dedup key: sender + first 50 chars of body
+    final dedupKey = '${sender}_${body.length > 50 ? body.substring(0, 50) : body}';
+    if (_recentlyAnalyzed.contains(dedupKey)) {
+      AppLogger.sms('Skipping duplicate SMS from: $sender');
+      return;
+    }
+    _recentlyAnalyzed.add(dedupKey);
+    // Clean old entries after 10 seconds
+    Future.delayed(const Duration(seconds: 10), () {
+      _recentlyAnalyzed.remove(dedupKey);
+    });
+
     try {
       final result = await _riskEngine.analyzeMessage(
         message: body,
@@ -124,7 +140,7 @@ class SmsListener {
       _smsController.add(result);
       _onSmsAnalyzed?.call(result);
 
-      AppLogger.sms('SMS analyzed - Risk: ${result.riskLevel} | Type: ${result.fraudType}');
+      AppLogger.sms('SMS analyzed - Risk: ${result.riskLevel} (${result.riskScore.toStringAsFixed(2)}) | Type: ${result.fraudType}');
     } catch (e, stackTrace) {
       AppLogger.error(
         'Error analyzing SMS',

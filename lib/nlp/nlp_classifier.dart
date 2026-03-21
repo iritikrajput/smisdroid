@@ -99,31 +99,29 @@ class NlpClassifier {
     if (_vocabulary == null) return [_clsTokenId, _sepTokenId];
 
     final tokens = <int>[_clsTokenId];
-    final words = text.toLowerCase().split(RegExp(r'\s+'));
 
-    for (final word in words) {
+    // Step 1: BasicTokenizer — lowercase, split on whitespace, then split
+    // each punctuation character as its own token (matching HuggingFace)
+    final basicTokens = _basicTokenize(text.toLowerCase());
+
+    for (final word in basicTokens) {
       if (word.isEmpty) continue;
-      if (tokens.length >= _maxSeqLength - 1) break; // Leave room for [SEP]
+      if (tokens.length >= _maxSeqLength - 1) break;
 
-      // Clean the word
-      final cleanWord = word.replaceAll(RegExp(r'[^\w]'), '');
-      if (cleanWord.isEmpty) continue;
-
-      // Try full word first
-      if (_vocabulary!.containsKey(cleanWord)) {
-        tokens.add(_vocabulary![cleanWord]!);
+      // Step 2: WordPiece — try full word, then break into subwords
+      if (_vocabulary!.containsKey(word)) {
+        tokens.add(_vocabulary![word]!);
         continue;
       }
 
-      // WordPiece: break into subwords
-      var remaining = cleanWord;
+      // WordPiece subword splitting
+      var remaining = word;
       var isFirst = true;
 
       while (remaining.isNotEmpty && tokens.length < _maxSeqLength - 1) {
         String? bestMatch;
         int bestLen = 0;
 
-        // Find longest matching prefix/subword
         for (var end = remaining.length; end > 0; end--) {
           final substr = isFirst
               ? remaining.substring(0, end)
@@ -141,19 +139,68 @@ class NlpClassifier {
           remaining = remaining.substring(bestLen);
           isFirst = false;
         } else {
-          // Unknown character — use [UNK] and skip
           tokens.add(_unkTokenId);
           break;
         }
       }
     }
 
-    // Add [SEP] token
     if (tokens.length < _maxSeqLength) {
       tokens.add(_sepTokenId);
     }
 
     return tokens;
+  }
+
+  /// BasicTokenizer: split text into tokens, treating each punctuation
+  /// character as a separate token (matching HuggingFace behavior).
+  /// "http://xyz.tk" → ["http", ":", "/", "/", "xyz", ".", "tk"]
+  List<String> _basicTokenize(String text) {
+    final result = <String>[];
+    final buffer = StringBuffer();
+
+    for (final char in text.runes) {
+      final c = String.fromCharCode(char);
+
+      if (_isPunctuation(char) || _isChinese(char)) {
+        // Flush buffer as a word token
+        if (buffer.isNotEmpty) {
+          result.add(buffer.toString());
+          buffer.clear();
+        }
+        // Add punctuation as its own token
+        result.add(c);
+      } else if (c.trim().isEmpty) {
+        // Whitespace — flush buffer
+        if (buffer.isNotEmpty) {
+          result.add(buffer.toString());
+          buffer.clear();
+        }
+      } else {
+        buffer.write(c);
+      }
+    }
+
+    if (buffer.isNotEmpty) {
+      result.add(buffer.toString());
+    }
+
+    return result;
+  }
+
+  /// Check if a character is punctuation (matching BERT's definition)
+  bool _isPunctuation(int cp) {
+    if ((cp >= 33 && cp <= 47) ||   // ! " # $ % & ' ( ) * + , - . /
+        (cp >= 58 && cp <= 64) ||   // : ; < = > ? @
+        (cp >= 91 && cp <= 96) ||   // [ \ ] ^ _ `
+        (cp >= 123 && cp <= 126)) { // { | } ~
+      return true;
+    }
+    return false;
+  }
+
+  bool _isChinese(int cp) {
+    return (cp >= 0x4E00 && cp <= 0x9FFF);
   }
 
   // Keyword-weighted fallback scoring
