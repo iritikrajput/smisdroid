@@ -21,7 +21,7 @@ A privacy-preserving Android application that detects SMS-based financial fraud 
 11. [Tech Stack](#11-tech-stack)
 12. [Getting Started](#12-getting-started)
 13. [Testing](#13-testing)
-14. [References](#14-references)
+
 
 ---
 
