@@ -86,7 +86,7 @@ def test_file(filepath):
 
     # Find label column (optional)
     label_col = None
-    for col in ["class_label", "label", "class", "category"]:
+    for col in ["class_label", "label", "class", "category", "attack_type", "type"]:
         if col in df.columns:
             label_col = col
             break

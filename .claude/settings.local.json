@@ -25,7 +25,14 @@
       "Read(//home/ritikrajput/**)",
       "Bash(mkdir -p /home/ritikrajput/Documents/smisdroid/model_training/datasets)",
       "Bash(cp /home/ritikrajput/Downloads/train.csv /home/ritikrajput/Documents/smisdroid/model_training/datasets/train.csv)",
-      "Bash(/home/ritikrajput/Documents/smisdroid/model_training/venv/bin/python -u -c \":*)"
+      "Bash(/home/ritikrajput/Documents/smisdroid/model_training/venv/bin/python -u -c \":*)",
+      "Bash(/home/ritikrajput/Documents/smisdroid/model_training/venv/bin/python -u train_mobilebert.py)",
+      "Bash(find /home/ritikrajput -name test*.csv -maxdepth 5)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(git rebase:*)",
+      "Bash(GIT_EDITOR=true git rebase --continue)"
     ]
   }
 }
