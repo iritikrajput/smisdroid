@@ -21,7 +21,11 @@
       "Bash(ls /home/ritikrajput/Documents/smisdroid/*.csv /home/ritikrajput/Documents/smisdroid/data/ /home/ritikrajput/Documents/smisdroid/dataset/)",
       "Bash(wc -l /home/ritikrajput/Documents/smisdroid/model_training/datasets/*.csv)",
       "Bash(pip install:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Read(//home/ritikrajput/**)",
+      "Bash(mkdir -p /home/ritikrajput/Documents/smisdroid/model_training/datasets)",
+      "Bash(cp /home/ritikrajput/Downloads/train.csv /home/ritikrajput/Documents/smisdroid/model_training/datasets/train.csv)",
+      "Bash(/home/ritikrajput/Documents/smisdroid/model_training/venv/bin/python -u -c \":*)"
     ]
   }
 }
