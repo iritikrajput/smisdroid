@@ -9,6 +9,10 @@ class NlpClassifier {
   bool _isLoaded = false;
 
   static const int _maxSeqLength = 128;
+  static const int _clsTokenId = 101;
+  static const int _sepTokenId = 102;
+  static const int _unkTokenId = 100;
+  static const int _padTokenId = 0;
 
   // Fallback keyword scoring when model isn't loaded
   static const Map<String, double> _fraudIndicators = {
@@ -52,7 +56,7 @@ class NlpClassifier {
       // Load TFLite model
       _interpreter = await Interpreter.fromAsset('assets/models/fraud_model.tflite');
       _isLoaded = true;
-      AppLogger.nlp('NLP classifier initialized successfully');
+      AppLogger.nlp('NLP classifier initialized — vocab: ${_vocabulary!.length} tokens');
     } catch (e) {
       AppLogger.warning('Failed to load NLP model, using fallback: $e', tag: 'NLP');
       _isLoaded = false;
@@ -65,41 +69,88 @@ class NlpClassifier {
     }
 
     try {
-      // Tokenize text
-      final tokens = _tokenize(text);
+      // WordPiece tokenize with [CLS] and [SEP]
+      final tokenIds = _wordPieceTokenize(text);
 
-      // Prepare input tensor
-      final input = List.filled(_maxSeqLength, 0);
-      for (var i = 0; i < tokens.length && i < _maxSeqLength; i++) {
-        input[i] = tokens[i];
+      // Prepare input tensor [1, 128]
+      final input = List.filled(_maxSeqLength, _padTokenId);
+      for (var i = 0; i < tokenIds.length && i < _maxSeqLength; i++) {
+        input[i] = tokenIds[i];
       }
 
-      // Prepare output tensor
+      // Prepare output tensor [1, 1]
       final output = List.filled(1, 0.0).reshape([1, 1]);
 
       // Run inference
       _interpreter!.run([input], output);
 
-      final score = output[0][0] as double;
+      final score = (output[0][0] as double).clamp(0.0, 1.0);
       AppLogger.nlp('NLP model score: $score');
-      return score.clamp(0.0, 1.0);
+      return score;
     } catch (e) {
       AppLogger.error('NLP inference failed: $e', tag: 'NLP');
       return _fallbackScore(text);
     }
   }
 
-  List<int> _tokenize(String text) {
-    if (_vocabulary == null) return [];
+  /// WordPiece tokenization matching HuggingFace MobileBERT tokenizer.
+  /// Produces: [CLS] token1 token2 ... [SEP]
+  List<int> _wordPieceTokenize(String text) {
+    if (_vocabulary == null) return [_clsTokenId, _sepTokenId];
 
+    final tokens = <int>[_clsTokenId];
     final words = text.toLowerCase().split(RegExp(r'\s+'));
-    final tokens = <int>[];
 
     for (final word in words) {
+      if (word.isEmpty) continue;
+      if (tokens.length >= _maxSeqLength - 1) break; // Leave room for [SEP]
+
+      // Clean the word
       final cleanWord = word.replaceAll(RegExp(r'[^\w]'), '');
-      if (cleanWord.isNotEmpty && _vocabulary!.containsKey(cleanWord)) {
+      if (cleanWord.isEmpty) continue;
+
+      // Try full word first
+      if (_vocabulary!.containsKey(cleanWord)) {
         tokens.add(_vocabulary![cleanWord]!);
+        continue;
       }
+
+      // WordPiece: break into subwords
+      var remaining = cleanWord;
+      var isFirst = true;
+
+      while (remaining.isNotEmpty && tokens.length < _maxSeqLength - 1) {
+        String? bestMatch;
+        int bestLen = 0;
+
+        // Find longest matching prefix/subword
+        for (var end = remaining.length; end > 0; end--) {
+          final substr = isFirst
+              ? remaining.substring(0, end)
+              : '##${remaining.substring(0, end)}';
+
+          if (_vocabulary!.containsKey(substr)) {
+            bestMatch = substr;
+            bestLen = end;
+            break;
+          }
+        }
+
+        if (bestMatch != null) {
+          tokens.add(_vocabulary![bestMatch]!);
+          remaining = remaining.substring(bestLen);
+          isFirst = false;
+        } else {
+          // Unknown character — use [UNK] and skip
+          tokens.add(_unkTokenId);
+          break;
+        }
+      }
+    }
+
+    // Add [SEP] token
+    if (tokens.length < _maxSeqLength) {
+      tokens.add(_sepTokenId);
     }
 
     return tokens;
