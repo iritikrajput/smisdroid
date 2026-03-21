@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
-SMISDroid — MobileBERT Multi-Class Fine-Tuning Pipeline
-========================================================
+SMISDroid — MobileBERT Binary Classification Training
+======================================================
 
-Fine-tunes MobileBERT (google/mobilebert-uncased) on train.csv for SMS fraud
-detection with 6-class output, then exports to quantized TensorFlow Lite
+Fine-tunes MobileBERT (google/mobilebert-uncased) on train.csv for binary
+SMS fraud detection (fraud vs safe), then exports to quantized TFLite
 for on-device inference.
 
 Dataset: train.csv with columns (message_text, class_label)
+Labels:  benign → 0 (Safe), all fraud types → 1 (Fraud)
 
-Classes (6):
-    0 = benign              — Legitimate message
-    1 = kyc_scam            — KYC verification scam
-    2 = impersonation       — Brand/bank impersonation
-    3 = phishing_link       — Phishing URL message
-    4 = fake_payment_portal — Fake payment page scam
-    5 = account_block_scam  — Account blocked/suspended scam
+Fraud subtypes (kyc_scam, impersonation, phishing_link, fake_payment_portal,
+account_block_scam) are classified separately by the rule engine in the app.
 
 Usage:
     # Activate virtual environment
@@ -25,14 +21,21 @@ Usage:
     cd model_training
     python train_mobilebert.py
 
-    # Output files are saved to output/ and copied to assets/
+    # Or on Google Colab: upload this file + train.csv, set GPU runtime, run it
+
+Output files (saved to output/ and copied to assets/):
+    - fraud_model.tflite     — Quantized TFLite model (~25 MB)
+    - vocabulary.json        — MobileBERT WordPiece vocabulary (30522 tokens)
+    - nlp_config.json        — Model configuration + training metadata
+    - model_weights.json     — Model size + parameter count
 
 Hardware:
-    - GPU recommended (~20 min on T4), CPU works (~45 min on modern CPU)
+    - GPU recommended (~20 min on T4)
+    - CPU works (~45 min on modern CPU)
     - ~4 GB RAM required
 
 Author: SMISDroid Development Team
-Date:   March 21, 2026
+Date:   March 2026
 """
 
 import os
@@ -43,7 +46,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from transformers import MobileBertTokenizer, TFMobileBertForSequenceClassification
 
 # ─── Configuration ────────────────────────────────────────────
@@ -61,25 +64,22 @@ LEARNING_RATE = 2e-5
 TEST_SPLIT = 0.2
 RANDOM_SEED = 42
 
-# 6 class labels — order matters (index = class ID)
-LABELS = [
+VALID_LABELS = {
     "benign",
     "kyc_scam",
     "impersonation",
     "phishing_link",
     "fake_payment_portal",
     "account_block_scam",
-]
-NUM_CLASSES = len(LABELS)
-LABEL_TO_ID = {label: idx for idx, label in enumerate(LABELS)}
-ID_TO_LABEL = {str(idx): label for label, idx in LABEL_TO_ID.items()}
+}
 
 
 # ─── Step 1: Load and Clean Dataset ──────────────────────────
 
 def load_dataset(path):
     """
-    Load train.csv and map to 6-class integer labels.
+    Load train.csv and map to binary labels.
+    benign → 0 (safe), all fraud types → 1 (fraud)
     """
     print("Loading dataset: %s" % path)
     raw_df = pd.read_csv(path)
@@ -87,30 +87,36 @@ def load_dataset(path):
 
     # Keep only valid rows
     df = raw_df[["message_text", "class_label"]].dropna()
-    df = df[df["class_label"].isin(LABELS)].copy()
+    df = df[df["class_label"].isin(VALID_LABELS)].copy()
 
-    # Multi-class mapping
-    df["label"] = df["class_label"].map(LABEL_TO_ID)
+    # Binary mapping: benign=0, everything else=1
+    df["label"] = (df["class_label"] != "benign").astype(int)
     df = df.rename(columns={"message_text": "text"})
 
-    # Deduplicate
+    # Deduplicate and shuffle
     df = df.drop_duplicates(subset=["text"])
     df = df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
 
     print("  Cleaned rows: %d" % len(df))
     print("  Label distribution:")
-    for label in LABELS:
+    for label in sorted(VALID_LABELS):
         count = int((df["class_label"] == label).sum())
-        pct = count / len(df) * 100
-        print("    %-25s (ID=%d): %5d samples (%.1f%%)" % (label, LABEL_TO_ID[label], count, pct))
+        mapping = "0 (Safe)" if label == "benign" else "1 (Fraud)"
+        print("    %-25s -> %-12s (%d samples)" % (label, mapping, count))
 
-    return df[["text", "label", "class_label"]]
+    fraud_count = int(df["label"].sum())
+    safe_count = len(df) - fraud_count
+    print("  Binary split: Fraud=%d (%.1f%%) | Safe=%d (%.1f%%)" % (
+        fraud_count, fraud_count / len(df) * 100,
+        safe_count, safe_count / len(df) * 100))
+
+    return df[["text", "label"]]
 
 
 # ─── Step 2: Tokenize ────────────────────────────────────────
 
 def tokenize(texts, tokenizer):
-    """Tokenize a list of texts using MobileBERT WordPiece tokenizer."""
+    """Tokenize texts using MobileBERT WordPiece tokenizer."""
     return tokenizer(
         texts,
         max_length=MAX_SEQ_LENGTH,
@@ -140,9 +146,9 @@ def make_tf_dataset(encodings, labels, batch_size, shuffle=False):
 # ─── Step 4: Fine-Tune ───────────────────────────────────────
 
 def train_model(train_ds, val_ds):
-    """Load pre-trained MobileBERT and fine-tune on SMS data (6 classes)."""
+    """Load pre-trained MobileBERT and fine-tune for binary classification."""
     model = TFMobileBertForSequenceClassification.from_pretrained(
-        MODEL_NAME, num_labels=NUM_CLASSES
+        MODEL_NAME, num_labels=2
     )
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
@@ -150,7 +156,7 @@ def train_model(train_ds, val_ds):
         metrics=["accuracy"],
     )
     print("  Parameters: {:,}".format(model.count_params()))
-    print("  Classes: %d" % NUM_CLASSES)
+    print("  Epochs: %d | Batch size: %d | LR: %.0e" % (EPOCHS, BATCH_SIZE, LEARNING_RATE))
 
     history = model.fit(
         train_ds,
@@ -164,21 +170,35 @@ def train_model(train_ds, val_ds):
 # ─── Step 5: Evaluate ────────────────────────────────────────
 
 def evaluate(model, val_ds, y_test):
-    """Run evaluation and print per-class classification report."""
+    """Run evaluation and print classification report."""
     preds = model.predict(val_ds)
     y_pred = np.argmax(preds.logits, axis=-1)
 
-    print(classification_report(y_test, y_pred, target_names=LABELS, digits=4))
+    print(classification_report(
+        y_test, y_pred,
+        target_names=["Legitimate", "Fraud"],
+        digits=4,
+    ))
 
     cm = confusion_matrix(y_test, y_pred)
     print("Confusion Matrix:")
-    for i, row in enumerate(cm):
-        print("  %-25s %s" % (LABELS[i], row.tolist()))
+    print("                  Predicted Safe  Predicted Fraud")
+    print("  Actually Safe:     TN=%5d        FP=%5d" % (cm[0][0], cm[0][1]))
+    print("  Actually Fraud:    FN=%5d        TP=%5d" % (cm[1][0], cm[1][1]))
 
-    accuracy = np.sum(np.array(y_test) == y_pred) / len(y_test)
-    print("\nOverall Accuracy: %.2f%%" % (accuracy * 100))
+    accuracy = (cm[0][0] + cm[1][1]) / cm.sum()
+    precision = cm[1][1] / (cm[1][1] + cm[0][1]) if (cm[1][1] + cm[0][1]) > 0 else 0
+    recall = cm[1][1] / (cm[1][1] + cm[1][0]) if (cm[1][1] + cm[1][0]) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-    return y_pred, cm
+    print("\nAccuracy:    %.2f%%" % (accuracy * 100))
+    print("Precision:   %.2f%%" % (precision * 100))
+    print("Recall:      %.2f%%" % (recall * 100))
+    print("F1-Score:    %.2f%%" % (f1 * 100))
+    print("FP Rate:     %.2f%%" % (cm[0][1] / (cm[0][0] + cm[0][1]) * 100))
+    print("FN Rate:     %.2f%%" % (cm[1][0] / (cm[1][0] + cm[1][1]) * 100))
+
+    return y_pred, cm, accuracy
 
 
 # ─── Step 6: Export TFLite ────────────────────────────────────
@@ -186,7 +206,7 @@ def evaluate(model, val_ds, y_test):
 def export_tflite(model, output_path):
     """
     Export model to quantized TFLite format.
-    Output: [1, 6] tensor — softmax probabilities for all 6 classes.
+    Output: single float — fraud probability (0.0-1.0)
     """
     class TFLiteWrapper(tf.Module):
         def __init__(self, model):
@@ -205,8 +225,8 @@ def export_tflite(model, output_path):
                 token_type_ids=token_type_ids,
                 training=False,
             )
-            # Return ALL class probabilities (not just fraud)
-            return tf.nn.softmax(outputs.logits, axis=-1)
+            probs = tf.nn.softmax(outputs.logits, axis=-1)
+            return probs[:, 1:2]  # Fraud probability only
 
     wrapper = TFLiteWrapper(model)
     concrete_func = wrapper.predict.get_concrete_function()
@@ -226,7 +246,7 @@ def export_tflite(model, output_path):
 
     size_mb = len(tflite_model) / 1024 / 1024
     print("  Model saved: %s (%.1f MB)" % (output_path, size_mb))
-    print("  Output shape: [1, %d] (probabilities for %s)" % (NUM_CLASSES, LABELS))
+    print("  Output: [1, 1] — single fraud probability float")
     return tflite_model
 
 
@@ -252,9 +272,8 @@ def verify_tflite(tflite_path, tokenizer, X_test, y_test):
         )
         interp.set_tensor(inp_d[0]["index"], tokens["input_ids"].astype(np.int32))
         interp.invoke()
-        probs = interp.get_tensor(out_d[0]["index"])[0]
-        pred = int(np.argmax(probs))
-        if pred == y_test[i]:
+        score = interp.get_tensor(out_d[0]["index"])[0][0]
+        if (1 if score > 0.5 else 0) == y_test[i]:
             correct += 1
         if (i + 1) % 300 == 0:
             print("    %d/%d — %.1f%%" % (i + 1, n, correct / (i + 1) * 100))
@@ -266,8 +285,10 @@ def verify_tflite(tflite_path, tokenizer, X_test, y_test):
 
 # ─── Step 8: Export Assets ────────────────────────────────────
 
-def export_assets(tokenizer, model, tflite_model, correct, n_test, n_train):
+def export_assets(tokenizer, model, tflite_model, correct, n_test, n_train, accuracy):
     """Export vocabulary, config, and weights metadata."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     # Vocabulary
     vocab = tokenizer.get_vocab()
     sorted_vocab = {k: int(v) for k, v in sorted(vocab.items(), key=lambda x: x[1])}
@@ -282,24 +303,33 @@ def export_assets(tokenizer, model, tflite_model, correct, n_test, n_train):
         "model_name": MODEL_NAME,
         "max_seq_length": MAX_SEQ_LENGTH,
         "vocab_size": tokenizer.vocab_size,
-        "num_classes": NUM_CLASSES,
-        "labels": LABELS,
-        "label_to_id": LABEL_TO_ID,
-        "id_to_label": ID_TO_LABEL,
+        "num_labels": 2,
+        "labels": ["benign", "fraud"],
         "input_type": "token_ids",
-        "output_type": "class_probabilities",
+        "output_type": "fraud_probability",
+        "detection_mode": "hybrid",
+        "binary_model": "fraud_model.tflite",
+        "subtype_classifier": "rule_engine",
+        "subtype_labels": [
+            "kyc_scam", "impersonation", "phishing_link",
+            "fake_payment_portal", "account_block_scam",
+        ],
+        "threshold_safe": 0.3,
+        "threshold_suspicious": 0.6,
         "pad_token_id": tokenizer.pad_token_id,
         "cls_token_id": tokenizer.cls_token_id,
         "sep_token_id": tokenizer.sep_token_id,
         "unk_token_id": tokenizer.unk_token_id,
-        "version": "2.0.0",
+        "version": "2.1.0",
         "training": {
+            "type": "binary",
             "epochs": EPOCHS,
             "batch_size": BATCH_SIZE,
             "learning_rate": LEARNING_RATE,
             "train_samples": n_train,
             "test_samples": n_test,
             "test_accuracy": round(correct / n_test, 4),
+            "keras_accuracy": round(accuracy, 4),
         },
     }
     config_path = os.path.join(OUTPUT_DIR, "nlp_config.json")
@@ -312,8 +342,7 @@ def export_assets(tokenizer, model, tflite_model, correct, n_test, n_train):
         "type": "mobilebert",
         "base_model": MODEL_NAME,
         "total_params": int(model.count_params()),
-        "num_classes": NUM_CLASSES,
-        "labels": LABELS,
+        "num_labels": 2,
         "quantization": "dynamic_range",
         "tflite_size_bytes": len(tflite_model),
     }
@@ -346,7 +375,7 @@ def copy_to_assets():
 
 def main():
     print("=" * 60)
-    print("  SMISDroid — MobileBERT 6-Class Training Pipeline")
+    print("  SMISDroid — MobileBERT Binary Training Pipeline")
     print("=" * 60)
     print("TensorFlow: %s" % tf.__version__)
 
@@ -365,11 +394,11 @@ def main():
     tf.random.set_seed(RANDOM_SEED)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Step 1: Load dataset
+    # Step 1
     print("\n--- Step 1: Loading Dataset ---")
     df = load_dataset(DATASET_PATH)
 
-    # Step 2: Split
+    # Step 2
     print("\n--- Step 2: Train/Test Split ---")
     X_train, X_test, y_train, y_test = train_test_split(
         df["text"].tolist(), df["label"].tolist(),
@@ -377,7 +406,7 @@ def main():
     )
     print("  Train: %d | Test: %d" % (len(X_train), len(X_test)))
 
-    # Step 3: Tokenize
+    # Step 3
     print("\n--- Step 3: Tokenizing ---")
     tokenizer = MobileBertTokenizer.from_pretrained(MODEL_NAME)
     train_enc = tokenize(X_train, tokenizer)
@@ -388,34 +417,36 @@ def main():
     train_ds = make_tf_dataset(train_enc, y_train, BATCH_SIZE, shuffle=True)
     val_ds = make_tf_dataset(test_enc, y_test, BATCH_SIZE, shuffle=False)
 
-    # Step 4: Fine-tune
-    print("\n--- Step 4: Fine-Tuning MobileBERT (%d classes) ---" % NUM_CLASSES)
+    # Step 4
+    print("\n--- Step 4: Fine-Tuning MobileBERT (Binary) ---")
     model, history = train_model(train_ds, val_ds)
 
-    # Step 5: Evaluate
+    # Step 5
     print("\n--- Step 5: Evaluation ---")
-    y_pred, cm = evaluate(model, val_ds, y_test)
+    y_pred, cm, accuracy = evaluate(model, val_ds, y_test)
 
-    # Step 6: Export TFLite
+    # Step 6
     print("\n--- Step 6: Exporting TFLite ---")
     tflite_path = os.path.join(OUTPUT_DIR, "fraud_model.tflite")
     tflite_model = export_tflite(model, tflite_path)
 
-    # Step 7: Verify TFLite
+    # Step 7
     print("\n--- Step 7: Verifying TFLite ---")
     correct, n_test = verify_tflite(tflite_path, tokenizer, X_test, y_test)
 
-    # Step 8: Export assets
+    # Step 8
     print("\n--- Step 8: Exporting Flutter Assets ---")
-    export_assets(tokenizer, model, tflite_model, correct, n_test, len(X_train))
+    export_assets(tokenizer, model, tflite_model, correct, n_test, len(X_train), accuracy)
 
-    # Step 9: Copy to Flutter assets
+    # Step 9
     print("\n--- Step 9: Copying to Flutter Assets ---")
     copy_to_assets()
 
     print("\n" + "=" * 60)
-    print("  DONE! 6-class model trained and exported")
-    print("  Classes: %s" % str(LABELS))
+    print("  DONE!")
+    print("  Model: Binary MobileBERT (fraud vs safe)")
+    print("  TFLite accuracy: %d/%d (%.2f%%)" % (correct, n_test, correct / n_test * 100))
+    print("  Fraud subtypes: classified by rule engine in the app")
     print("  Run: flutter build apk --debug")
     print("=" * 60)
 
