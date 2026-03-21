@@ -8,20 +8,29 @@ import android.util.Log
 
 /**
  * Native BroadcastReceiver for SMS_RECEIVED.
- * Ensures SMS messages are captured even when the app is killed.
- * Forwards the message to Flutter via a MethodChannel through MainActivity.
+ * Registered both in AndroidManifest (for background) and at runtime (for foreground).
  */
 class SmsReceiver : BroadcastReceiver() {
     companion object {
-        private const val TAG = "SmsReceiver"
+        private const val TAG = "SMISDroid"
         var onSmsReceived: ((sender: String, body: String) -> Unit)? = null
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        Log.d(TAG, "BroadcastReceiver.onReceive triggered: action=${intent.action}")
+
+        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+            Log.w(TAG, "Ignoring non-SMS intent: ${intent.action}")
+            return
+        }
 
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-        if (messages.isNullOrEmpty()) return
+        if (messages.isNullOrEmpty()) {
+            Log.w(TAG, "No messages in SMS intent")
+            return
+        }
+
+        Log.d(TAG, "Received ${messages.size} SMS PDU(s)")
 
         // Group multi-part SMS by sender
         val grouped = mutableMapOf<String, StringBuilder>()
@@ -33,10 +42,14 @@ class SmsReceiver : BroadcastReceiver() {
 
         for ((sender, body) in grouped) {
             val fullMessage = body.toString()
-            Log.d(TAG, "SMS received from: $sender (${fullMessage.length} chars)")
+            Log.d(TAG, "SMS from: $sender | length: ${fullMessage.length} | preview: ${fullMessage.take(50)}")
 
-            // Forward to Flutter callback if registered
-            onSmsReceived?.invoke(sender, fullMessage)
+            if (onSmsReceived != null) {
+                onSmsReceived?.invoke(sender, fullMessage)
+                Log.d(TAG, "SMS forwarded to Flutter via callback")
+            } else {
+                Log.w(TAG, "onSmsReceived callback is NULL — Flutter not connected")
+            }
         }
     }
 }
