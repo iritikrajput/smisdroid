@@ -14,7 +14,7 @@ class DatabaseService {
     final path = join(await getDatabasesPath(), 'smisdroid.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE fraud_logs (
@@ -22,6 +22,7 @@ class DatabaseService {
             sender TEXT,
             risk_level TEXT,
             risk_score REAL,
+            fraud_type TEXT DEFAULT 'benign',
             urls TEXT,
             rules TEXT,
             domain_score INTEGER,
@@ -78,6 +79,14 @@ class DatabaseService {
             )
           ''');
         }
+        if (oldVersion < 3) {
+          try {
+            await db.execute("ALTER TABLE fraud_logs ADD COLUMN fraud_type TEXT DEFAULT 'benign'");
+          } catch (_) {}
+          try {
+            await db.execute("ALTER TABLE blocked_messages ADD COLUMN fraud_type TEXT DEFAULT 'benign'");
+          } catch (_) {}
+        }
       },
     );
   }
@@ -88,6 +97,7 @@ class DatabaseService {
       'sender': result.sender,
       'risk_level': result.riskLevel,
       'risk_score': result.riskScore,
+      'fraud_type': result.fraudType,
       'urls': result.detectedUrls.join(','),
       'rules': result.triggeredRules.join('|'),
       'domain_score': result.domainScore,
@@ -238,6 +248,7 @@ class DatabaseService {
       'sender': result.sender,
       'message': result.originalMessage,
       'risk_score': result.riskScore,
+      'fraud_type': result.fraudType,
       'urls': result.detectedUrls.join(','),
       'rules': result.triggeredRules.join('|'),
       'domain_score': result.domainScore,

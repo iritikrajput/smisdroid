@@ -1,16 +1,8 @@
 {
   "type": "mobilebert",
   "base_model": "google/mobilebert-uncased",
-  "total_params": 24584966,
-  "num_classes": 6,
-  "labels": [
-    "benign",
-    "kyc_scam",
-    "impersonation",
-    "phishing_link",
-    "fake_payment_portal",
-    "account_block_scam"
-  ],
+  "total_params": 24582914,
+  "num_labels": 2,
   "quantization": "dynamic_range",
-  "tflite_size_bytes": 26728056
+  "tflite_size_bytes": 26727112
 }

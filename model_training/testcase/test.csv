@@ -1,0 +1,16 @@
+message_text	class_label
+New water meter installation scheduled at your property on 3 Nov 2024. Be available 9 AM-1 PM.	benign
+Your water account 5774836158 has no pending dues. Thank you for timely payment.	benign
+BOI Security: Transaction of Rs.2135 from account 9787044552 is held. Verify identity at https://mahadiscom-7Sx9xA8B8.in/bill/pay to release.	impersonation
+BWSSB Notice: Pending water bill Rs.20462 for consumer 0258513641. Pay online: https://axisbank-69ul4.in/confirm to avoid disconnection tomorrow.	kyc_scam
+KYC expired. Update within 2 hours to avoid account freeze: https://securebank-login.com/update/oafgJ	phishing_link
+Bank notice: Please ignore suspicious calls/SMS asking for OTP.	benign
+LPG connection blocked. Reactivate by paying Rs. 851 at https://[tiny.one]/SDDnjZb	fake_payment_portal
+EMI of Rs.6941 auto-debited from account 9500838168 on 26 Jun 2024. Loan account updated.	benign
+Transaction alert: Rs.4624 debited from account 7116689930. UPI Ref: 48800761. If not done by you, call 1800-XXX.	benign
+Dear Customer, Indane Gas has detected Rs.3878 pending dues on account 5635383123. Pay via: https://cutt.ly/PiSCSGa5Q today.	kyc_scam
+Gas service suspended due to KYC issue. Update now at https://117.145.131.175/gasbill.support/bill/axTI0	phishing_link
+Electricity bill reminder: Rs. 6911 due. Pay via official DISCOM app or website http://discom.example.in/pay/i1NkD?ref=BOioS3D9&amt=3280	benign
+HPCL Gas Service: Pending bill Rs.19526 for consumer 2723124167. Immediate payment needed at http://powerpay-WRY9h6E.store/now.	impersonation
+Hi, this is City Power. Your account has Rs.15242 dues. Complete payment at http://bankverify-Yd8ewb.info/kyc or service cuts tonight.	kyc_scam
+HP Gas Alert: Pending dues Rs.17139 on your account. Update KYC and pay at https://is.gd/cMavMGpk immediately.	kyc_scam

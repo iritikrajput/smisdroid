@@ -80,9 +80,14 @@ class RiskEngine {
 
     final riskLevel = RiskThresholds.getRiskLevel(finalScore);
 
+    // Classify fraud subtype if not safe
+    final fraudType = riskLevel == 'SAFE'
+        ? 'benign'
+        : RuleEngine.classifyFraudType(message, urls);
+
     final endTime = DateTime.now();
     final analysisTime = endTime.difference(startTime).inMilliseconds;
-    AppLogger.risk('Analysis completed in ${analysisTime}ms - Risk: $riskLevel ($finalScore)');
+    AppLogger.risk('Analysis completed in ${analysisTime}ms - Risk: $riskLevel ($finalScore) Type: $fraudType');
 
     // Create result
     final result = SmsAnalysisResult(
@@ -90,6 +95,7 @@ class RiskEngine {
       sender: sender,
       riskLevel: riskLevel,
       riskScore: finalScore,
+      fraudType: fraudType,
       detectedUrls: urls,
       triggeredRules: [...triggeredRules, ...domainIndicators],
       domainScore: domainScore,
@@ -104,6 +110,7 @@ class RiskEngine {
         'rule_contribution': normalizedRule * RiskThresholds.ruleWeight,
         'structural_score': structuralScore,
         'structural_contribution': structuralScore * RiskThresholds.structuralWeight,
+        'fraud_type': fraudType,
         'final_score': finalScore,
         'analysis_time_ms': analysisTime,
       },

@@ -17,8 +17,9 @@ class AlertScreen extends StatelessWidget {
     final sender = logData['sender'] as String;
     final timestamp = DateTime.parse(logData['timestamp'] as String);
     final riskScore = (logData['risk_score'] as num).toDouble();
-    final nlpScore = (logData['nlp_score'] as num).toDouble();
-    final domainScore = logData['domain_score'] as int;
+    final nlpScore = (logData['nlp_score'] as num?)?.toDouble() ?? 0.0;
+    final domainScore = (logData['domain_score'] as num?)?.toInt() ?? 0;
+    final fraudType = logData['fraud_type'] as String? ?? 'benign';
     final urls = (logData['urls'] as String?)?.split(',').where((u) => u.isNotEmpty).toList() ?? [];
     final rules = (logData['rules'] as String?)?.split('|').where((r) => r.isNotEmpty).toList() ?? [];
 
@@ -60,7 +61,7 @@ class AlertScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Header Card
-            _buildHeaderCard(context, riskLevel, sender, timestamp, riskScore),
+            _buildHeaderCard(context, riskLevel, sender, timestamp, riskScore, fraudType),
             const SizedBox(height: 16),
 
             // Score Breakdown
@@ -93,7 +94,19 @@ class AlertScreen extends StatelessWidget {
     String sender,
     DateTime timestamp,
     double riskScore,
+    String fraudType,
   ) {
+    String fraudLabel(String type) {
+      switch (type) {
+        case 'kyc_scam': return 'KYC Scam';
+        case 'impersonation': return 'Impersonation';
+        case 'phishing_link': return 'Phishing Link';
+        case 'fake_payment_portal': return 'Fake Payment Portal';
+        case 'account_block_scam': return 'Account Block Scam';
+        default: return 'Benign';
+      }
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -121,6 +134,25 @@ class AlertScreen extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                   ),
             ),
+            if (fraudType != 'benign') ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: riskLevel.riskColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: riskLevel.riskColor.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  fraudLabel(fraudType),
+                  style: TextStyle(
+                    color: riskLevel.riskColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             const Divider(),
             const SizedBox(height: 16),

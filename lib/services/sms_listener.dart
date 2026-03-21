@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:telephony/telephony.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../core/utils/logger.dart';
@@ -17,6 +18,10 @@ class SmsListener {
 
   final Telephony _telephony = Telephony.instance;
   final RiskEngine _riskEngine = RiskEngine();
+
+  // Native Android EventChannel for real-time SMS
+  static const _smsEventChannel = EventChannel('com.example.smisdroid/sms_events');
+  StreamSubscription? _nativeSubscription;
 
   SmsCallback? _onSmsAnalyzed;
   bool _isListening = false;
@@ -66,34 +71,60 @@ class SmsListener {
     _onSmsAnalyzed = onSmsAnalyzed;
     _isListening = true;
 
+    // Method 1: Native Android EventChannel (primary — more reliable)
+    _startNativeListener();
+
+    // Method 2: Telephony plugin (backup + background handler)
     _telephony.listenIncomingSms(
       onNewMessage: _handleIncomingSms,
       onBackgroundMessage: _backgroundMessageHandler,
       listenInBackground: true,
     );
 
-    AppLogger.sms('Started listening for incoming SMS');
+    AppLogger.sms('Started listening for incoming SMS (native + telephony)');
+  }
+
+  void _startNativeListener() {
+    _nativeSubscription?.cancel();
+    _nativeSubscription = _smsEventChannel
+        .receiveBroadcastStream()
+        .listen(
+      (event) {
+        if (event is Map) {
+          final sender = event['sender'] as String? ?? 'Unknown';
+          final body = event['body'] as String? ?? '';
+          if (body.isNotEmpty) {
+            AppLogger.sms('Native SMS received from: $sender');
+            _analyzeAndNotify(sender, body);
+          }
+        }
+      },
+      onError: (error) {
+        AppLogger.error('Native SMS stream error: $error', tag: 'SMS');
+      },
+    );
   }
 
   void stopListening() {
     _isListening = false;
     _onSmsAnalyzed = null;
+    _nativeSubscription?.cancel();
+    _nativeSubscription = null;
     AppLogger.sms('Stopped listening for SMS');
   }
 
-  Future<void> _handleIncomingSms(SmsMessage message) async {
-    AppLogger.sms('Received SMS from: ${message.address}');
-
+  /// Core analysis method — used by both native and telephony listeners
+  Future<void> _analyzeAndNotify(String sender, String body) async {
     try {
       final result = await _riskEngine.analyzeMessage(
-        message: message.body ?? '',
-        sender: message.address ?? 'Unknown',
+        message: body,
+        sender: sender,
       );
 
       _smsController.add(result);
       _onSmsAnalyzed?.call(result);
 
-      AppLogger.sms('SMS analyzed - Risk Level: ${result.riskLevel}');
+      AppLogger.sms('SMS analyzed - Risk: ${result.riskLevel} | Type: ${result.fraudType}');
     } catch (e, stackTrace) {
       AppLogger.error(
         'Error analyzing SMS',
@@ -102,6 +133,15 @@ class SmsListener {
         stackTrace: stackTrace,
       );
     }
+  }
+
+  Future<void> _handleIncomingSms(SmsMessage message) async {
+    // Telephony plugin fallback — only process if native didn't catch it
+    AppLogger.sms('Telephony SMS from: ${message.address}');
+    await _analyzeAndNotify(
+      message.address ?? 'Unknown',
+      message.body ?? '',
+    );
   }
 
   Future<List<SmsMessage>> getInboxMessages({int count = 50}) async {
@@ -160,7 +200,6 @@ Future<void> _backgroundMessageHandler(SmsMessage message) async {
   await NotificationService.initialize();
 
   if (result.riskLevel == 'FRAUD') {
-    // Auto-block fraud messages
     await DatabaseService.blockMessage(result);
     AppLogger.warning('Background SMS BLOCKED as FRAUD', tag: 'SMS');
 
