@@ -3,21 +3,44 @@
   "model_name": "google/mobilebert-uncased",
   "max_seq_length": 128,
   "vocab_size": 30522,
+  "num_classes": 6,
+  "labels": [
+    "benign",
+    "kyc_scam",
+    "impersonation",
+    "phishing_link",
+    "fake_payment_portal",
+    "account_block_scam"
+  ],
+  "label_to_id": {
+    "benign": 0,
+    "kyc_scam": 1,
+    "impersonation": 2,
+    "phishing_link": 3,
+    "fake_payment_portal": 4,
+    "account_block_scam": 5
+  },
+  "id_to_label": {
+    "0": "benign",
+    "1": "kyc_scam",
+    "2": "impersonation",
+    "3": "phishing_link",
+    "4": "fake_payment_portal",
+    "5": "account_block_scam"
+  },
   "input_type": "token_ids",
-  "output_type": "fraud_probability",
-  "threshold_safe": 0.3,
-  "threshold_suspicious": 0.6,
+  "output_type": "class_probabilities",
   "pad_token_id": 0,
   "cls_token_id": 101,
   "sep_token_id": 102,
   "unk_token_id": 100,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "training": {
     "epochs": 3,
     "batch_size": 16,
     "learning_rate": 2e-05,
     "train_samples": 5391,
     "test_samples": 1348,
-    "test_accuracy": 0.997
+    "test_accuracy": 0.4429
   }
 }
